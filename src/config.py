@@ -14,7 +14,7 @@ R2_BUCKET        = os.environ["R2_BUCKET"]
 R2_PUBLIC_URL    = os.environ["R2_PUBLIC_URL"]  # https://pub-xxx.r2.dev
 
 # LLM translation model (mlx-lm, runs locally on Apple Silicon)
-LLM_MODEL        = os.environ.get("LLM_MODEL", "mlx-community/Qwen2.5-14B-Instruct-4bit")
+LLM_MODEL        = os.environ.get("LLM_MODEL", "mlx-community/Gemma-4-26B-MoE-4bit")
 
 # HuggingFace token (required for pyannote speaker diarization models)
 HF_TOKEN         = os.environ["HF_TOKEN"]

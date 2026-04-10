@@ -6,6 +6,7 @@ model can resolve pronouns, match tone, and handle speaker-specific slang.
 Model is loaded once at module level and stays resident across all jobs.
 """
 import logging
+import re
 
 from mlx_lm import load, generate
 
@@ -81,33 +82,34 @@ def translate(segments: list[dict], source_lang: str, target_lang: str) -> list[
     return out
 
 
+def _strip_think(text: str) -> str:
+    """Remove Gemma 4 <|think|>...</|think|> reasoning blocks from output."""
+    return re.sub(r'<\|think\|>.*?</\|think\|>', '', text, flags=re.DOTALL).strip()
+
+
 def _clean(text: str) -> str:
     """Strip whitespace and truncate at the first sign of runaway repetition."""
     text = text.strip()
-    # Detect a word/token repeated more than 5 times consecutively and cut there.
-    import re
     text = re.sub(r'(\S+)(\s+\1){5,}.*', r'\1', text)
     return text.strip()
 
 
 def _translate_segment(target_text: str, context_text: str, target_lang: str) -> str:
-    prompt = f"""<|im_start|>system
-You are a professional podcast translator. You will be provided with the preceding context of a conversation, followed by a 'TARGET SEGMENT'.
-Your task is to translate ONLY the TARGET SEGMENT into {target_lang}.
-Use the preceding context to accurately determine gender, tone, slang, and pronoun resolution.
-Output ONLY the translated text. Do not include quotes, explanations, or the original text.<|im_end|>
-<|im_start|>user
-PREVIOUS CONTEXT: {context_text}
+    prompt = f"""<start_of_turn>user
+You are an expert podcast translator. You will receive the PREVIOUS CONTEXT of a conversation, followed by a TARGET SEGMENT.
+1. Think about the gender, tone, slang, and pronouns based on the context.
+2. Translate ONLY the TARGET SEGMENT into {target_lang}.
 
-TARGET SEGMENT TO TRANSLATE: {target_text}<|im_end|>
-<|im_start|>assistant
+PREVIOUS CONTEXT: {context_text}
+TARGET SEGMENT: {target_text}<end_of_turn>
+<start_of_turn>model
 """
-    translation = generate(
+    raw = generate(
         _llm_model,
         _llm_tokenizer,
         prompt=prompt,
-        max_tokens=250,
+        max_tokens=350,
         verbose=False,
         repetition_penalty=1.2,
     )
-    return _clean(translation)
+    return _clean(_strip_think(raw))
