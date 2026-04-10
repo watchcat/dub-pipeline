@@ -125,7 +125,7 @@ def process_job(job: dict):
             speaker_samples_r2[speaker] = r2_key
 
         # ── Step 3b: Split long segments ──────────────────────────────────────
-        # Must run before translation so each sub-segment gets its own DeepL call.
+        # Must run before translation — keeps each segment within XTTS-v2 limits.
         segments = split_segments.split_long_segments(segments)
         log.info(f"dub {dub_id}: {len(segments)} segments after split")
 

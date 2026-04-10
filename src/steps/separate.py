@@ -2,6 +2,7 @@
 
 Returns paths to (vocals_wav, background_wav) as 16 kHz mono WAV files.
 """
+import gc
 import logging
 import os
 import subprocess
@@ -45,6 +46,9 @@ def separate(audio_url: str, out_dir: str) -> tuple[str, str]:
         ],
         check=True,
     )
+    # Demucs runs in a subprocess; collect any lingering Python objects and
+    # nudge the allocator to release pages before the LLM loads.
+    gc.collect()
 
     stem = Path(local_audio).stem
     demucs_out = Path(out_dir) / config.DEMUCS_MODEL / stem
