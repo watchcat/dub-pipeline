@@ -81,6 +81,15 @@ def translate(segments: list[dict], source_lang: str, target_lang: str) -> list[
     return out
 
 
+def _clean(text: str) -> str:
+    """Strip whitespace and truncate at the first sign of runaway repetition."""
+    text = text.strip()
+    # Detect a word/token repeated more than 5 times consecutively and cut there.
+    import re
+    text = re.sub(r'(\S+)(\s+\1){5,}.*', r'\1', text)
+    return text.strip()
+
+
 def _translate_segment(target_text: str, context_text: str, target_lang: str) -> str:
     prompt = f"""<|im_start|>system
 You are a professional podcast translator. You will be provided with the preceding context of a conversation, followed by a 'TARGET SEGMENT'.
@@ -99,5 +108,6 @@ TARGET SEGMENT TO TRANSLATE: {target_text}<|im_end|>
         prompt=prompt,
         max_tokens=250,
         verbose=False,
+        repetition_penalty=1.2,
     )
-    return translation.strip()
+    return _clean(translation)
