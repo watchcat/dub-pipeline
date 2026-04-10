@@ -8,7 +8,7 @@ Model is loaded once at module level and stays resident across all jobs.
 import logging
 import re
 
-from mlx_lm import load, generate
+from mlx_vlm import load, generate
 
 from src import config
 
@@ -17,7 +17,7 @@ log = logging.getLogger(__name__)
 # ── Model (loaded once, stays in memory across jobs) ─────────────────────────
 
 log.info(f"translate: loading LLM {config.LLM_MODEL} …")
-_llm_model, _llm_tokenizer = load(config.LLM_MODEL)
+_llm_model, _llm_processor = load(config.LLM_MODEL)
 log.info("translate: LLM ready")
 
 # Sliding-window size: how many preceding segments to pass as context.
@@ -106,7 +106,7 @@ TARGET SEGMENT: {target_text}<end_of_turn>
 """
     raw = generate(
         _llm_model,
-        _llm_tokenizer,
+        _llm_processor,
         prompt=prompt,
         max_tokens=350,
         verbose=False,
