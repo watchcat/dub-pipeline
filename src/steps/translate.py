@@ -104,7 +104,7 @@ PREVIOUS CONTEXT: {context_text}
 TARGET SEGMENT: {target_text}<end_of_turn>
 <start_of_turn>model
 """
-    raw = generate(
+    result = generate(
         _llm_model,
         _llm_processor,
         prompt=prompt,
@@ -112,4 +112,5 @@ TARGET SEGMENT: {target_text}<end_of_turn>
         verbose=False,
         repetition_penalty=1.2,
     )
+    raw = result.text if hasattr(result, "text") else str(result)
     return _clean(_strip_think(raw))
