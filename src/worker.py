@@ -171,16 +171,33 @@ def process_job(job: dict):
         segment_count  = len([s for s in segments if s.get("synth_wav")])
         speaker_count  = len(speaker_samples)
 
+        segment_data = [
+            {
+                "idx":             seg["idx"],
+                "start_sec":       seg["start_sec"],
+                "end_sec":         seg["end_sec"],
+                "speaker_id":      seg.get("speaker"),
+                "text":            seg.get("text", ""),
+                "words":           seg.get("words"),
+                "translated_text": seg.get("translated_text"),
+                "synth_r2_key":    seg.get("synth_r2_key"),
+                "synth_duration":  seg.get("synth_duration"),
+            }
+            for seg in segments
+        ]
+
         _callback(callback_url, {
-            "job_id":        job_id,
-            "dub_id":        dub_id,
-            "episode_id":    episode_id,
-            "language":      language,
-            "success":       True,
-            "r2_url":        r2_url,
-            "duration_sec":  round(duration_sec, 1),
-            "segment_count": segment_count,
-            "speaker_count": speaker_count,
+            "job_id":          job_id,
+            "dub_id":          dub_id,
+            "episode_id":      episode_id,
+            "language":        language,
+            "success":         True,
+            "r2_url":          r2_url,
+            "duration_sec":    round(duration_sec, 1),
+            "segment_count":   segment_count,
+            "speaker_count":   speaker_count,
+            "speaker_samples": json.dumps(speaker_samples_r2),
+            "segments":        segment_data,
         })
         progress.report(dub_id, "complete", 100)
 
