@@ -23,5 +23,6 @@ ENV TEMP_DIR=/tmp/dub-pipeline
 ENV WHISPER_DEVICE=cuda
 ENV WHISPER_COMPUTE=float16
 ENV TTS_DEVICE=cuda
+ENV COQUI_TOS_AGREED=1
 
 CMD ["python", "-m", "src.worker"]
