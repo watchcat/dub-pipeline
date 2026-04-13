@@ -20,6 +20,8 @@ COPY src/ src/
 # Models live on the RunPod Network Volume — set at runtime via env var
 ENV MODEL_DIR=/runpod-volume/models
 ENV TEMP_DIR=/tmp/dub-pipeline
-ENV PYTORCH_ENABLE_MPS_FALLBACK=1
+ENV WHISPER_DEVICE=cuda
+ENV WHISPER_COMPUTE=float16
+ENV TTS_DEVICE=cuda
 
 CMD ["python", "-m", "src.worker"]
