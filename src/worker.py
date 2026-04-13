@@ -1,6 +1,6 @@
-"""Main worker — BRPOP loop for dub:jobs queue.
+"""RunPod Serverless worker — processes dub jobs dispatched by buzz-bot.
 
-Job payload (JSON, per spec):
+Job payload (JSON, received via RunPod handler input):
 {
   "job_id":       "hex32",
   "dub_id":       123,
@@ -11,18 +11,8 @@ Job payload (JSON, per spec):
   "callback_url": "https://app.buzz-bot.top/internal/dub_result"
 }
 
-Success callback:
-{
-  "job_id": "hex32", "dub_id": 123, "episode_id": 456, "language": "es",
-  "success": true, "r2_url": "https://...",
-  "duration_sec": 2847.3, "segment_count": 142, "speaker_count": 2
-}
-
-Failure callback:
-{
-  "job_id": "hex32", "dub_id": 123,
-  "success": false, "step": "separating", "error": "..."
-}
+Progress and result are reported back to buzz-bot via HTTP callbacks
+(/internal/dub_progress and /internal/dub_result).
 """
 import os
 import warnings
@@ -36,7 +26,6 @@ import logging
 logging.getLogger("google_genai.models").setLevel(logging.WARNING)
 import shutil
 import tempfile
-import time
 
 import requests
 import runpod
@@ -331,6 +320,8 @@ def handler(job: dict) -> dict:
         return {"ok": False, "error": str(exc)}
 
 
+# Ensure TEMP_DIR exists regardless of how this module is loaded.
+os.makedirs(config.TEMP_DIR, exist_ok=True)
+
 if __name__ == "__main__":
-    os.makedirs(config.TEMP_DIR, exist_ok=True)
     runpod.serverless.start({"handler": handler})
