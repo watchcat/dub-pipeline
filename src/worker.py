@@ -305,6 +305,7 @@ def _synthesize_with_progress(
     tts = _load_tts()
     model = tts.synthesizer.tts_model
     xtts_lang = _xtts_lang_code(language)
+    log.info(f"dub {dub_id}: synthesizing {len(segments)} segments, lang={language} → xtts_lang={xtts_lang}")
 
     # Pre-compute speaker embeddings once per speaker.
     speaker_latents: dict[str, tuple] = {}
@@ -349,6 +350,8 @@ def _synthesize_with_progress(
 
         else:
             try:
+                if i < 3:
+                    log.info(f"dub {dub_id}: seg {idx} sample text='{text[:80]}'")
                 gpt_cond_latent, speaker_embedding = latents
                 result = model.inference(
                     text=text,
