@@ -83,12 +83,14 @@ _RESPONSE_SCHEMA = types.Schema(
 
 
 _MAX_RETRIES = 3
-_RETRY_DELAY = 5  # seconds, doubled on each attempt
+_RETRY_DELAY = 10  # seconds, doubled on each attempt
+_FALLBACK_MODEL = "gemini-2.0-flash"
 
 
 def _translate_batch(segments: list[dict], target_lang: str) -> dict[int, str]:
     """Send all segments to Gemini in one call. Returns {idx: translated_text}.
-    Retries up to _MAX_RETRIES times on transient errors with exponential backoff."""
+    Retries up to _MAX_RETRIES times on transient errors with exponential backoff.
+    Falls back to _FALLBACK_MODEL if the primary model fails all retries."""
     prompt = f"""You are an expert podcast translator. Translate each segment into {target_lang}.
 
 - Translate ONLY the "text" field of each segment.
@@ -97,35 +99,39 @@ def _translate_batch(segments: list[dict], target_lang: str) -> dict[int, str]:
 Segments:
 {json.dumps(segments, ensure_ascii=False)}"""
 
-    last_exc = None
-    delay = _RETRY_DELAY
-    for attempt in range(1, _MAX_RETRIES + 1):
-        try:
-            response = _client.models.generate_content(
-                model=config.GEMINI_MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.1,
-                    response_mime_type="application/json",
-                    response_schema=_RESPONSE_SCHEMA,
-                ),
-            )
-            result = json.loads(response.text)
-            out = {}
-            for item in result:
-                idx = item["idx"]
-                translated = item.get("translated_text", "")
-                if not translated:
-                    log.warning(f"translate: seg {idx} has empty translated_text")
-                out[idx] = translated
-            return out
-        except Exception as exc:
-            last_exc = exc
-            if attempt < _MAX_RETRIES:
-                log.warning(f"translate: Gemini call failed (attempt {attempt}/{_MAX_RETRIES}): {exc} — retrying in {delay}s")
-                time.sleep(delay)
-                delay *= 2
-            else:
-                log.error(f"translate: Gemini call failed after {_MAX_RETRIES} attempts: {exc}")
+    models = [config.GEMINI_MODEL, _FALLBACK_MODEL]
+    for model in models:
+        last_exc = None
+        delay = _RETRY_DELAY
+        for attempt in range(1, _MAX_RETRIES + 1):
+            try:
+                response = _client.models.generate_content(
+                    model=model,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.1,
+                        response_mime_type="application/json",
+                        response_schema=_RESPONSE_SCHEMA,
+                    ),
+                )
+                result = json.loads(response.text)
+                out = {}
+                for item in result:
+                    idx = item["idx"]
+                    translated = item.get("translated_text", "")
+                    if not translated:
+                        log.warning(f"translate: seg {idx} has empty translated_text")
+                    out[idx] = translated
+                if model != config.GEMINI_MODEL:
+                    log.info(f"translate: succeeded with fallback model {model}")
+                return out
+            except Exception as exc:
+                last_exc = exc
+                if attempt < _MAX_RETRIES:
+                    log.warning(f"translate: {model} failed (attempt {attempt}/{_MAX_RETRIES}): {exc} — retrying in {delay}s")
+                    time.sleep(delay)
+                    delay *= 2
+                else:
+                    log.error(f"translate: {model} failed after {_MAX_RETRIES} attempts: {exc} — trying fallback")
 
     raise last_exc
