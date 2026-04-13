@@ -1,27 +1,21 @@
-"""Step 4 — Translate segments with a local LLM via mlx-lm.
+"""Step 4 — Translate segments with Gemini Flash via the Google GenAI SDK.
 
-Uses a sliding window of the last N translated sentences as context so the
-model can resolve pronouns, match tone, and handle speaker-specific slang.
-
-Model is loaded once at module level and stays resident across all jobs.
+All segments are sent in a single batch request with full context, which is
+much faster than one API call per segment and gives the model global context.
 """
+import json
 import logging
-import re
+import time
 
-from mlx_vlm import load, generate
+from google import genai
+from google.genai import types
+from google.api_core.exceptions import GoogleAPIError
 
 from src import config
 
 log = logging.getLogger(__name__)
 
-# ── Model (loaded once, stays in memory across jobs) ─────────────────────────
-
-log.info(f"translate: loading LLM {config.LLM_MODEL} …")
-_llm_model, _llm_processor = load(config.LLM_MODEL)
-log.info("translate: LLM ready")
-
-# Sliding-window size: how many preceding segments to pass as context.
-_CONTEXT_WINDOW = 5
+_client = genai.Client(api_key=config.GEMINI_API_KEY)
 
 # Full language names for the system prompt.
 _LANG_NAMES = {
@@ -45,8 +39,8 @@ _LANG_NAMES = {
 
 def translate(segments: list[dict], source_lang: str, target_lang: str) -> list[dict]:
     """
-    Translate all segments from source_lang to target_lang using the local LLM.
-    Each segment gets the preceding _CONTEXT_WINDOW segments as context.
+    Translate all segments from source_lang to target_lang using Gemini Flash.
+    All segments are sent in one batch request.
     If source_lang == target_lang, copies text verbatim.
     Returns segments with "translated_text" added.
     """
@@ -55,62 +49,84 @@ def translate(segments: list[dict], source_lang: str, target_lang: str) -> list[
         return [{**seg, "translated_text": seg["text"]} for seg in segments]
 
     lang_name = _LANG_NAMES.get(target_lang.lower(), target_lang)
-    log.info(f"translate: {len(segments)} segments, {source_lang} → {lang_name}")
+    log.info(f"translate: {len(segments)} segments, {source_lang} → {lang_name} via Gemini")
+
+    # Build input list: only idx + text needed.
+    input_segs = [{"idx": seg.get("idx", i), "text": seg.get("text", "").strip()}
+                  for i, seg in enumerate(segments)]
+
+    translations = _translate_batch(input_segs, lang_name)
 
     out = []
-    context_window: list[str] = []  # rolling list of recent original texts
-
     for i, seg in enumerate(segments):
-        text = seg.get("text", "").strip()
-        if not text:
-            out.append({**seg, "translated_text": ""})
-            continue
-
-        context_text = " ".join(context_window)
-        translated = _translate_segment(text, context_text, lang_name)
+        idx = seg.get("idx", i)
+        translated = translations.get(idx)
+        if translated is None:
+            log.warning(f"translate: seg {idx} missing from Gemini response, using empty string")
+            translated = ""
         out.append({**seg, "translated_text": translated})
-
-        # Advance window with the original text so context is always in the
-        # source language — consistent regardless of translation quality.
-        context_window.append(text)
-        if len(context_window) > _CONTEXT_WINDOW:
-            context_window.pop(0)
-
-        log.debug(f"translate: seg {seg.get('idx', i)} done")
 
     log.info("translate: done")
     return out
 
 
-def _strip_think(text: str) -> str:
-    """Remove Gemma 4 <|think|>...</|think|> reasoning blocks from output."""
-    return re.sub(r'<\|think\|>.*?</\|think\|>', '', text, flags=re.DOTALL).strip()
+_RESPONSE_SCHEMA = types.Schema(
+    type=types.Type.ARRAY,
+    items=types.Schema(
+        type=types.Type.OBJECT,
+        properties={
+            "idx":             types.Schema(type=types.Type.INTEGER),
+            "translated_text": types.Schema(type=types.Type.STRING),
+        },
+        required=["idx", "translated_text"],
+    ),
+)
 
 
-def _clean(text: str) -> str:
-    """Strip whitespace and truncate at the first sign of runaway repetition."""
-    text = text.strip()
-    text = re.sub(r'(\S+)(\s+\1){5,}.*', r'\1', text)
-    return text.strip()
+_MAX_RETRIES = 3
+_RETRY_DELAY = 5  # seconds, doubled on each attempt
 
 
-def _translate_segment(target_text: str, context_text: str, target_lang: str) -> str:
-    prompt = f"""<start_of_turn>user
-You are an expert podcast translator. You will receive the PREVIOUS CONTEXT of a conversation, followed by a TARGET SEGMENT.
-1. Think about the gender, tone, slang, and pronouns based on the context.
-2. Translate ONLY the TARGET SEGMENT into {target_lang}.
+def _translate_batch(segments: list[dict], target_lang: str) -> dict[int, str]:
+    """Send all segments to Gemini in one call. Returns {idx: translated_text}.
+    Retries up to _MAX_RETRIES times on transient errors with exponential backoff."""
+    prompt = f"""You are an expert podcast translator. Translate each segment into {target_lang}.
 
-PREVIOUS CONTEXT: {context_text}
-TARGET SEGMENT: {target_text}<end_of_turn>
-<start_of_turn>model
-"""
-    result = generate(
-        _llm_model,
-        _llm_processor,
-        prompt=prompt,
-        max_tokens=350,
-        verbose=False,
-        repetition_penalty=1.2,
-    )
-    raw = result.text if hasattr(result, "text") else str(result)
-    return _clean(_strip_think(raw))
+- Translate ONLY the "text" field of each segment.
+- Preserve tone, speaker style, and idiomatic expressions.
+
+Segments:
+{json.dumps(segments, ensure_ascii=False)}"""
+
+    last_exc = None
+    delay = _RETRY_DELAY
+    for attempt in range(1, _MAX_RETRIES + 1):
+        try:
+            response = _client.models.generate_content(
+                model=config.GEMINI_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.1,
+                    response_mime_type="application/json",
+                    response_schema=_RESPONSE_SCHEMA,
+                ),
+            )
+            result = json.loads(response.text)
+            out = {}
+            for item in result:
+                idx = item["idx"]
+                translated = item.get("translated_text", "")
+                if not translated:
+                    log.warning(f"translate: seg {idx} has empty translated_text")
+                out[idx] = translated
+            return out
+        except (GoogleAPIError, Exception) as exc:
+            last_exc = exc
+            if attempt < _MAX_RETRIES:
+                log.warning(f"translate: Gemini call failed (attempt {attempt}/{_MAX_RETRIES}): {exc} — retrying in {delay}s")
+                time.sleep(delay)
+                delay *= 2
+            else:
+                log.error(f"translate: Gemini call failed after {_MAX_RETRIES} attempts: {exc}")
+
+    raise last_exc

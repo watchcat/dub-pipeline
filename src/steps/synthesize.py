@@ -5,6 +5,8 @@ Returns segments with "synth_wav" path added.
 """
 import logging
 import os
+import re
+import unicodedata
 
 # Must be set before PyTorch attempts any MPS op — XTTS-v2 uses conv layers
 # with >65536 output channels which are not natively supported on MPS.
@@ -38,29 +40,49 @@ def synthesize(
     Returns segments with "synth_wav" path added (or None if synthesis failed).
     speaker_samples: {speaker_id: local_wav_path}
     """
+    import torch
+    import scipy.io.wavfile
+
     tts = _load_tts()
+    model = tts.synthesizer.tts_model
     xtts_lang = _xtts_lang_code(target_lang)
+
+    # Pre-compute speaker embeddings once per speaker (expensive — avoid per-segment).
+    speaker_latents: dict[str, tuple] = {}
+    for speaker_id, wav_path in speaker_samples.items():
+        if wav_path and os.path.exists(wav_path):
+            log.info(f"synthesize: computing embeddings for {speaker_id}")
+            gpt_cond_latent, speaker_embedding = model.get_conditioning_latents(
+                audio_path=[wav_path]
+            )
+            speaker_latents[speaker_id] = (gpt_cond_latent, speaker_embedding)
 
     out = []
     for seg in segments:
         speaker = seg.get("speaker", "SPEAKER_00")
-        sample_wav = speaker_samples.get(speaker)
-        translated = seg.get("translated_text", "").strip()
+        latents = speaker_latents.get(speaker)
+        translated = _clean_for_tts(seg.get("translated_text", ""))
 
-        if not sample_wav or not translated:
-            log.warning(f"synthesize: skipping seg {seg['idx']} — no sample or text")
+        if not latents or not translated:
+            log.warning(f"synthesize: skipping seg {seg['idx']} — no latents or text")
             out.append({**seg, "synth_wav": None})
             continue
 
         synth_path = os.path.join(out_dir, f"synth_{seg['idx']:04d}.wav")
         try:
-            tts.tts_to_file(
+            gpt_cond_latent, speaker_embedding = latents
+            result = model.inference(
                 text=translated,
-                speaker_wav=sample_wav,
                 language=xtts_lang,
-                file_path=synth_path,
+                gpt_cond_latent=gpt_cond_latent,
+                speaker_embedding=speaker_embedding,
             )
-            synth_dur = _wav_duration(synth_path)
+            wav = result["wav"]
+            if isinstance(wav, torch.Tensor):
+                wav = wav.cpu().numpy()
+            wav_int16 = (wav * 32767).clip(-32768, 32767).astype("int16")
+            scipy.io.wavfile.write(synth_path, 24000, wav_int16)
+            synth_dur = len(wav_int16) / 24000
             log.info(f"synthesize: seg {seg['idx']} ({speaker}) → {synth_dur:.2f}s")
             out.append({**seg, "synth_wav": synth_path, "synth_duration": synth_dur})
         except Exception as e:
@@ -70,10 +92,27 @@ def synthesize(
     return out
 
 
+
 def _wav_duration(path: str) -> float:
     import wave
     with wave.open(path, "rb") as wf:
         return wf.getnframes() / wf.getframerate()
+
+
+def _clean_for_tts(text: str) -> str:
+    """Normalize text for XTTS-v2: replace Unicode punctuation that confuses the model."""
+    # Typographic quotes → straight quotes
+    text = text.replace('\u201c', '"').replace('\u201d', '"')
+    text = text.replace('\u2018', "'").replace('\u2019', "'")
+    # Em/en dashes → comma+space
+    text = text.replace('\u2014', ', ').replace('\u2013', ', ')
+    # Ellipsis character → three dots
+    text = text.replace('\u2026', '...')
+    # Remove control characters and other non-printable Unicode
+    text = ''.join(c for c in text if unicodedata.category(c)[0] != 'C')
+    # Collapse multiple spaces
+    text = re.sub(r' {2,}', ' ', text)
+    return text.strip()
 
 
 def _xtts_lang_code(lang: str) -> str:
