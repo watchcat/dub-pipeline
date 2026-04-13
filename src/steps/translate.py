@@ -71,6 +71,8 @@ def translate(segments: list[dict], source_lang: str, target_lang: str) -> list[
         out.append({**seg, "translated_text": translated})
 
     log.info("translate: done")
+    if out:
+        log.info(f"translate: sample — original='{out[0].get('text','')[:60]}' → translated='{out[0].get('translated_text','')[:60]}'")
     return out
 
 
