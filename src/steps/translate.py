@@ -9,7 +9,6 @@ import time
 
 from google import genai
 from google.genai import types
-from google.api_core.exceptions import GoogleAPIError
 
 from src import config
 
@@ -120,7 +119,7 @@ Segments:
                     log.warning(f"translate: seg {idx} has empty translated_text")
                 out[idx] = translated
             return out
-        except (GoogleAPIError, Exception) as exc:
+        except Exception as exc:
             last_exc = exc
             if attempt < _MAX_RETRIES:
                 log.warning(f"translate: Gemini call failed (attempt {attempt}/{_MAX_RETRIES}): {exc} — retrying in {delay}s")
