@@ -29,6 +29,9 @@ WHISPER_COMPUTE  = os.environ.get("WHISPER_COMPUTE", "float16")
 # XTTS-v2 device
 TTS_DEVICE       = os.environ.get("TTS_DEVICE", "mps")
 
+# Checkpoint directory — persists across RunPod restarts via Network Volume
+CHECKPOINT_DIR = os.environ.get("CHECKPOINT_DIR", "/tmp/dub-checkpoints")
+
 # Assembly
 MAX_DURATION_RATIO = float(os.environ.get("MAX_DURATION_RATIO", "1.5"))
 BG_VOLUME_DEFAULT  = float(os.environ.get("BG_VOLUME_DEFAULT", "0.15"))

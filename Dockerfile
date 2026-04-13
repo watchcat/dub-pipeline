@@ -24,6 +24,7 @@ ENV WHISPER_DEVICE=cuda
 ENV WHISPER_COMPUTE=float16
 ENV TTS_DEVICE=cuda
 ENV COQUI_TOS_AGREED=1
+ENV CHECKPOINT_DIR=/runpod-volume/checkpoints
 ENV XDG_DATA_HOME=/runpod-volume/models
 ENV HF_HOME=/runpod-volume/models/hf
 
