@@ -363,19 +363,36 @@ def _synthesize_with_progress(
                 if isinstance(wav, torch.Tensor):
                     wav = wav.cpu().numpy()
                 wav_int16 = (wav * 32767).clip(-32768, 32767).astype("int16")
-                # Save to checkpoint dir first (persistent), then upload to R2
                 scipy.io.wavfile.write(ckpt_path, 24000, wav_int16)
                 synth_dur = len(wav_int16) / 24000
                 synth_wav = ckpt_path
-                storage.upload(ckpt_path, r2_key, "audio/wav")
-                synth_r2_keys[idx] = r2_key
                 log.info(f"dub {dub_id}: seg {idx} ({speaker}) → {synth_dur:.2f}s")
             except Exception as e:
                 log.error(f"dub {dub_id}: seg {idx} synth failed: {e}")
 
+            # Upload to R2 separately — failure here doesn't discard the synthesized wav
+            if synth_wav:
+                try:
+                    storage.upload(ckpt_path, r2_key, "audio/wav")
+                    synth_r2_keys[idx] = r2_key
+                except Exception as e:
+                    log.warning(f"dub {dub_id}: seg {idx} R2 upload failed, will retry: {e}")
+
         pct = int((i + 1) / total * 100)
         progress.report(dub_id, "synthesizing", pct)
         out.append({**seg, "synth_wav": synth_wav, "synth_duration": synth_dur})
+
+    # Retry any R2 uploads that failed during synthesis
+    for seg in out:
+        idx = seg["idx"]
+        if seg.get("synth_wav") and idx not in synth_r2_keys:
+            r2_key = _stem_key(episode_id, f"synth_{language}_{idx:04d}.wav")
+            try:
+                storage.upload(ckpt.synth_path(idx), r2_key, "audio/wav")
+                synth_r2_keys[idx] = r2_key
+                log.info(f"dub {dub_id}: seg {idx} R2 upload retry succeeded")
+            except Exception as e:
+                log.error(f"dub {dub_id}: seg {idx} R2 upload retry failed: {e}")
 
     return out, synth_r2_keys
 

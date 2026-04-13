@@ -13,7 +13,7 @@ def _s3():
             endpoint_url=config.R2_ENDPOINT,
             aws_access_key_id=config.R2_ACCESS_KEY,
             aws_secret_access_key=config.R2_SECRET_KEY,
-            config=Config(signature_version="s3v4"),
+            config=Config(signature_version="s3v4", retries={"max_attempts": 10, "mode": "adaptive"}),
         )
     return _client
 
