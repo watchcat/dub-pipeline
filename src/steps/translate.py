@@ -54,7 +54,12 @@ def translate(segments: list[dict], source_lang: str, target_lang: str) -> list[
     input_segs = [{"idx": seg.get("idx", i), "text": seg.get("text", "").strip()}
                   for i, seg in enumerate(segments)]
 
-    translations = _translate_batch(input_segs, lang_name)
+    # Split into batches to avoid hitting Gemini output token limit
+    translations: dict[int, str] = {}
+    for batch_start in range(0, len(input_segs), _BATCH_SIZE):
+        batch = input_segs[batch_start:batch_start + _BATCH_SIZE]
+        log.info(f"translate: batch {batch_start // _BATCH_SIZE + 1}, segments {batch_start}–{batch_start + len(batch) - 1}")
+        translations.update(_translate_batch(batch, lang_name))
 
     out = []
     for i, seg in enumerate(segments):
@@ -85,6 +90,7 @@ _RESPONSE_SCHEMA = types.Schema(
 _MAX_RETRIES = 3
 _RETRY_DELAY = 10  # seconds, doubled on each attempt
 _FALLBACK_MODEL = "gemini-2.0-flash"
+_BATCH_SIZE = 50  # segments per Gemini call — avoids output token truncation
 
 
 def _translate_batch(segments: list[dict], target_lang: str) -> dict[int, str]:
