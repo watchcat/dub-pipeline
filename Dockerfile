@@ -24,5 +24,7 @@ ENV WHISPER_DEVICE=cuda
 ENV WHISPER_COMPUTE=float16
 ENV TTS_DEVICE=cuda
 ENV COQUI_TOS_AGREED=1
+ENV TTS_HOME=/runpod-volume/models/tts
+ENV HF_HOME=/runpod-volume/models/hf
 
 CMD ["python", "-m", "src.worker"]
