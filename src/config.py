@@ -1,7 +1,5 @@
 import os
 
-REDIS_URL        = os.environ["REDIS_URL"]
-QUEUE_KEY        = os.environ.get("QUEUE_KEY", "dub:jobs")
 PROGRESS_URL     = os.environ["PROGRESS_URL"]   # https://app.buzz-bot.top/internal/dub_progress
 TEMP_DIR         = os.environ.get("TEMP_DIR", "/tmp/dub-pipeline")
 MODEL_DIR        = os.environ.get("MODEL_DIR", os.path.join(os.path.dirname(__file__), "..", "models"))
@@ -13,8 +11,9 @@ R2_SECRET_KEY    = os.environ["R2_SECRET_ACCESS_KEY"]
 R2_BUCKET        = os.environ["R2_BUCKET"]
 R2_PUBLIC_URL    = os.environ["R2_PUBLIC_URL"]  # https://pub-xxx.r2.dev
 
-# LLM translation model (mlx-lm, runs locally on Apple Silicon)
-LLM_MODEL        = os.environ.get("LLM_MODEL", "mlx-community/gemma-4-26b-a4b-it-4bit")
+# Gemini translation model
+GEMINI_API_KEY   = os.environ["GEMINI_API_KEY"]
+GEMINI_MODEL     = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
 # HuggingFace token (required for pyannote speaker diarization models)
 HF_TOKEN         = os.environ["HF_TOKEN"]

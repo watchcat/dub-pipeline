@@ -25,17 +25,21 @@ Failure callback:
 }
 """
 import os
+import warnings
 # Set before any torch/TTS import so MPS fallback is active from the start
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
+# Suppress noisy HuggingFace tokenizer warning (pad_token == eos_token)
+warnings.filterwarnings("ignore", message=".*attention_mask.*")
 
 import json
 import logging
+logging.getLogger("google_genai.models").setLevel(logging.WARNING)
 import shutil
 import tempfile
 import time
 
-import redis
 import requests
+import runpod
 
 from src import config, progress, storage
 from src.steps import (
@@ -47,7 +51,7 @@ from src.steps import (
     transcribe,
     translate,
 )
-from src.steps.synthesize import _load_tts, _xtts_lang_code, _wav_duration as _synth_wav_duration
+from src.steps.synthesize import _load_tts, _xtts_lang_code, _wav_duration as _synth_wav_duration, _clean_for_tts
 
 logging.basicConfig(
     level=logging.INFO,
@@ -231,15 +235,29 @@ def _synthesize_with_progress(
     - Skips segments longer than MAX_SEGMENT_SEC (too long for XTTS-v2 context).
     - Reports progress after each segment.
     """
+    import torch
+    import scipy.io.wavfile
+
     tts = _load_tts()
+    model = tts.synthesizer.tts_model
     xtts_lang = _xtts_lang_code(language)
+
+    # Pre-compute speaker embeddings once per speaker.
+    speaker_latents: dict[str, tuple] = {}
+    for speaker_id, wav_path in speaker_samples.items():
+        if wav_path and os.path.exists(wav_path):
+            log.info(f"dub {dub_id}: computing embeddings for {speaker_id}")
+            gpt_cond_latent, speaker_embedding = model.get_conditioning_latents(
+                audio_path=[wav_path]
+            )
+            speaker_latents[speaker_id] = (gpt_cond_latent, speaker_embedding)
 
     out = []
     total = len(segments)
     for i, seg in enumerate(segments):
         speaker   = seg.get("speaker", "SPEAKER_00")
-        sample    = speaker_samples.get(speaker)
-        text      = seg.get("translated_text", "").strip()
+        latents   = speaker_latents.get(speaker)
+        text      = _clean_for_tts(seg.get("translated_text", ""))
         orig_dur  = seg["end_sec"] - seg["start_sec"]
 
         synth_wav  = None
@@ -247,18 +265,24 @@ def _synthesize_with_progress(
 
         if orig_dur < MIN_SEGMENT_SEC:
             log.debug(f"dub {dub_id}: seg {seg['idx']} too short ({orig_dur:.2f}s) — skipping")
-        elif not sample or not text:
-            log.warning(f"dub {dub_id}: seg {seg['idx']} — no sample or text")
+        elif not latents or not text:
+            log.warning(f"dub {dub_id}: seg {seg['idx']} — no latents or text")
         else:
             synth_path = os.path.join(synth_dir, f"synth_{seg['idx']:04d}.wav")
             try:
-                tts.tts_to_file(
+                gpt_cond_latent, speaker_embedding = latents
+                result = model.inference(
                     text=text,
-                    speaker_wav=sample,
                     language=xtts_lang,
-                    file_path=synth_path,
+                    gpt_cond_latent=gpt_cond_latent,
+                    speaker_embedding=speaker_embedding,
                 )
-                synth_dur = _synth_wav_duration(synth_path)
+                wav = result["wav"]
+                if isinstance(wav, torch.Tensor):
+                    wav = wav.cpu().numpy()
+                wav_int16 = (wav * 32767).clip(-32768, 32767).astype("int16")
+                scipy.io.wavfile.write(synth_path, 24000, wav_int16)
+                synth_dur = len(wav_int16) / 24000
                 synth_wav = synth_path
                 log.info(f"dub {dub_id}: seg {seg['idx']} ({speaker}) → {synth_dur:.2f}s")
             except Exception as e:
@@ -297,28 +321,16 @@ def _callback(url: str, payload: dict):
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
-def main():
-    os.makedirs(config.TEMP_DIR, exist_ok=True)
-
-    r = redis.from_url(config.REDIS_URL)
-    log.info(f"dub-worker: listening on {config.QUEUE_KEY}")
-
-    while True:
-        try:
-            item = r.brpop(config.QUEUE_KEY, timeout=5)
-            if item is None:
-                continue
-            _, raw = item
-            job = json.loads(raw)
-            log.info(f"dub-worker: got job dub_id={job.get('dub_id')}")
-            process_job(job)
-        except redis.exceptions.ConnectionError as e:
-            log.error(f"Redis connection lost: {e} — retrying in 5s")
-            time.sleep(5)
-        except Exception:
-            log.exception("dub-worker: unexpected error")
-            time.sleep(1)
+def handler(job: dict) -> dict:
+    """RunPod Serverless handler — called once per job by the RunPod runtime."""
+    try:
+        process_job(job["input"])
+        return {"ok": True}
+    except Exception as exc:
+        log.exception(f"handler: unhandled exception: {exc}")
+        return {"ok": False, "error": str(exc)}
 
 
 if __name__ == "__main__":
-    main()
+    os.makedirs(config.TEMP_DIR, exist_ok=True)
+    runpod.serverless.start({"handler": handler})
