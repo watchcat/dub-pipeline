@@ -219,7 +219,7 @@ def process_job(job: dict):
         current_step = "assembling"
         progress.report(dub_id, current_step)
         total_duration = _wav_duration(vocals_wav)
-        dubbed_vocals = assemble.assemble(segments, total_duration, work_dir)
+        dubbed_vocals, synth_timeline = assemble.assemble(segments, total_duration, work_dir)
 
         # ── Step 7: Mix ───────────────────────────────────────────────────────
         current_step = "mixing"
@@ -248,6 +248,7 @@ def process_job(job: dict):
                 "translated_text": seg.get("translated_text"),
                 "synth_r2_key":    synth_r2_keys.get(seg["idx"]),
                 "synth_duration":  seg.get("synth_duration"),
+                "synth_start_sec": synth_timeline.get(seg["idx"]),
             }
             for seg in segments
         ]
@@ -257,6 +258,7 @@ def process_job(job: dict):
             "dub_id":          dub_id,
             "episode_id":      episode_id,
             "language":        language,
+            "source_lang":     source_lang,
             "success":         True,
             "r2_url":          r2_url,
             "duration_sec":    round(duration_sec, 1),

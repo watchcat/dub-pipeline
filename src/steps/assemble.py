@@ -20,14 +20,14 @@ CHANNELS = 1
 MAX_DURATION_RATIO = 1.10  # 110% of original total duration
 
 
-def assemble(segments: list[dict], total_duration: float, out_dir: str) -> str:
+def assemble(segments: list[dict], total_duration: float, out_dir: str) -> tuple[str, dict[int, float]]:
     """
     Build dubbed_vocals.wav by placing synthesized clips on a timeline.
 
     segments: list of dicts with keys: idx, start_sec, end_sec, synth_wav,
               synth_duration (may be None if synthesis failed).
     total_duration: original episode duration in seconds.
-    Returns path to assembled WAV.
+    Returns (path to assembled WAV, {segment_idx: actual_start_sec_in_dubbed_audio}).
     """
     valid = [s for s in segments if s.get("synth_wav") and s.get("synth_duration")]
     if not valid:
@@ -40,6 +40,7 @@ def assemble(segments: list[dict], total_duration: float, out_dir: str) -> str:
     # ── Cursor-based placement ────────────────────────────────────────────────
     # Each entry: (place_at_sec, wav_path)
     timeline: list[tuple[float, str]] = []
+    synth_timeline: dict[int, float] = {}  # idx → actual start sec in dubbed audio
     cursor = 0.0
     prev_end = 0.0  # original end time of previous segment
 
@@ -51,6 +52,7 @@ def assemble(segments: list[dict], total_duration: float, out_dir: str) -> str:
         original_gap = orig_start - prev_end   # silence before this segment in original
 
         place_at = cursor
+        synth_timeline[seg["idx"]] = place_at
 
         if synth_dur > orig_dur:
             # Segment ran long — consume part of the following gap instead of overlapping
@@ -76,7 +78,7 @@ def assemble(segments: list[dict], total_duration: float, out_dir: str) -> str:
 
     out_path = os.path.join(out_dir, "dubbed_vocals.wav")
     _build_timeline(timeline, actual_end, out_path)
-    return out_path
+    return out_path, synth_timeline
 
 
 def _build_timeline(
