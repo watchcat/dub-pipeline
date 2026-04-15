@@ -54,20 +54,28 @@ def _load_diarize():
         # Pyannote checkpoints use custom classes not in the default allowlist.
         # Patch pyannote.audio.core.model.pl_load (the exact call site) to pass
         # weights_only=False. Pyannote checkpoints come from HF and are trusted.
+        # PyTorch 2.6+ weights_only=True breaks pyannote checkpoints.
+        # Both pyannote.audio.core.model AND pytorch_lightning.core.saving
+        # import pl_load as a local reference and may pass weights_only=True.
+        # Patch both to force weights_only=False.
         import pyannote.audio.core.model as _pam
-        _orig_pl_load = _pam.pl_load
+        import pytorch_lightning.core.saving as _pl_saving
 
-        def _pl_load_patched(path_or_url, map_location=None):
-            return torch.load(path_or_url, map_location=map_location, weights_only=False)
+        def _pl_load_patched(path, map_location=None, **_kwargs):
+            return torch.load(path, map_location=map_location, weights_only=False)
 
+        _orig_pam = _pam.pl_load
+        _orig_pls = _pl_saving.pl_load
         _pam.pl_load = _pl_load_patched
+        _pl_saving.pl_load = _pl_load_patched
         log.info("transcribe: loading pyannote diarization pipeline")
         try:
             _diarize_pipeline = Pipeline.from_pretrained(
                 "pyannote/speaker-diarization-3.1",
             )
         finally:
-            _pam.pl_load = _orig_pl_load
+            _pam.pl_load = _orig_pam
+            _pl_saving.pl_load = _orig_pls
         _diarize_pipeline = _diarize_pipeline.to(torch.device(config.WHISPER_DEVICE))
     return _diarize_pipeline
 
