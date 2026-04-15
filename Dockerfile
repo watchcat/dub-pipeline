@@ -1,6 +1,6 @@
 # RunPod Serverless worker — GPU image for dub-pipeline
 # Models are NOT baked in; they live on a RunPod Network Volume at /runpod-volume/models
-FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
+FROM runpod/pytorch:1.0.3-cu1281-torch260-ubuntu2204
 
 WORKDIR /app
 
