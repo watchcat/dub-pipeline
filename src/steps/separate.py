@@ -18,7 +18,7 @@ def separate(audio_url: str, out_dir: str) -> tuple[str, str]:
     """
     Download audio_url to a temp file, then run Demucs.
     Returns (vocals_wav, background_wav).
-    vocals_wav:     16 kHz mono WAV (required by WhisperX and XTTS-v2)
+    vocals_wav:     16 kHz mono WAV (required by WhisperX)
     background_wav: 44.1 kHz stereo WAV (full quality for mixing)
     """
     # Download to local file — Demucs does not accept URLs
@@ -59,7 +59,7 @@ def separate(audio_url: str, out_dir: str) -> tuple[str, str]:
     vocals_wav     = os.path.join(out_dir, "vocals.wav")
     background_wav = os.path.join(out_dir, "background.wav")
 
-    # Normalise vocals to 16 kHz mono (required by WhisperX and XTTS-v2)
+    # Normalise vocals to 16 kHz mono (required by WhisperX)
     _to_wav_16k(vocals_raw, vocals_wav)
     # Background kept at original sample rate/channels for quality mixing
     _to_wav_44k(background_raw, background_wav)

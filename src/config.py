@@ -26,9 +26,6 @@ WHISPER_MODEL    = os.environ.get("WHISPER_MODEL", "large-v3")
 WHISPER_DEVICE   = os.environ.get("WHISPER_DEVICE", "mps")   # mps | cuda | cpu
 WHISPER_COMPUTE  = os.environ.get("WHISPER_COMPUTE", "float16")
 
-# XTTS-v2 device
-TTS_DEVICE       = os.environ.get("TTS_DEVICE", "mps")
-
 # Checkpoint directory — persists across RunPod restarts via Network Volume
 CHECKPOINT_DIR = os.environ.get("CHECKPOINT_DIR", "/tmp/dub-checkpoints")
 
