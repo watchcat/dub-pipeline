@@ -40,7 +40,7 @@ from src.steps import (
     transcribe,
     translate,
 )
-from src.steps.synthesize import _load_tts, _xtts_lang_code, _wav_duration as _synth_wav_duration, _clean_for_tts
+from src.steps.synthesize import _load_model, _wav_duration as _synth_wav_duration, _clean_for_tts
 
 logging.basicConfig(
     level=logging.INFO,
@@ -296,50 +296,39 @@ def _synthesize_with_progress(
     dub_id: int,
 ) -> tuple[list[dict], dict[int, str]]:
     """
-    Synthesize each segment with XTTS-v2.
+    Synthesize each segment with VoxCPM2.
     Saves each completed segment wav to the checkpoint dir immediately.
     On resume, skips already-synthesized segments.
     Returns (segments_with_synth, {idx: r2_key}).
     """
-    import torch
-    import scipy.io.wavfile
+    import soundfile as sf
 
-    tts = _load_tts()
-    model = tts.synthesizer.tts_model
-    xtts_lang = _xtts_lang_code(language)
-    log.info(f"dub {dub_id}: synthesizing {len(segments)} segments, lang={language} → xtts_lang={xtts_lang}")
-
-    # Pre-compute speaker embeddings once per speaker.
-    speaker_latents: dict[str, tuple] = {}
-    for speaker_id, wav_path in speaker_samples.items():
-        if wav_path and os.path.exists(wav_path):
-            log.info(f"dub {dub_id}: computing embeddings for {speaker_id}")
-            gpt_cond_latent, speaker_embedding = model.get_conditioning_latents(
-                audio_path=[wav_path]
-            )
-            speaker_latents[speaker_id] = (gpt_cond_latent, speaker_embedding)
+    model = _load_model()
+    sr = model.tts_model.sample_rate
+    log.info(f"dub {dub_id}: synthesizing {len(segments)} segments → {language} at {sr} Hz")
 
     out = []
     synth_r2_keys: dict[int, str] = {}
     total = len(segments)
 
     for i, seg in enumerate(segments):
-        speaker   = seg.get("speaker", "SPEAKER_00")
-        latents   = speaker_latents.get(speaker)
-        text      = _clean_for_tts(seg.get("translated_text", ""))
-        orig_dur  = seg["end_sec"] - seg["start_sec"]
-        idx       = seg["idx"]
+        speaker  = seg.get("speaker", "SPEAKER_00")
+        text     = _clean_for_tts(seg.get("translated_text", ""))
+        orig_dur = seg["end_sec"] - seg["start_sec"]
+        idx      = seg["idx"]
 
         synth_wav = None
         synth_dur = None
         ckpt_path = ckpt.synth_path(idx)
         r2_key    = _stem_key(episode_id, f"synth_{language}_{idx:04d}.wav")
 
+        speaker_wav = speaker_samples.get(speaker)
+
         if orig_dur < MIN_SEGMENT_SEC:
             log.debug(f"dub {dub_id}: seg {idx} too short ({orig_dur:.2f}s) — skipping")
 
-        elif not latents or not text:
-            log.warning(f"dub {dub_id}: seg {idx} — no latents or text")
+        elif not speaker_wav or not text:
+            log.warning(f"dub {dub_id}: seg {idx} — no speaker sample or text")
 
         elif ckpt.synth_done(idx):
             # Resume: segment already synthesized in a previous run
@@ -354,19 +343,14 @@ def _synthesize_with_progress(
             try:
                 if i < 3:
                     log.info(f"dub {dub_id}: seg {idx} sample text='{text[:80]}'")
-                gpt_cond_latent, speaker_embedding = latents
-                result = model.inference(
+                wav = model.generate(
                     text=text,
-                    language=xtts_lang,
-                    gpt_cond_latent=gpt_cond_latent,
-                    speaker_embedding=speaker_embedding,
+                    reference_wav_path=speaker_wav,
+                    cfg_value=2.0,
+                    inference_timesteps=10,
                 )
-                wav = result["wav"]
-                if isinstance(wav, torch.Tensor):
-                    wav = wav.cpu().numpy()
-                wav_int16 = (wav * 32767).clip(-32768, 32767).astype("int16")
-                scipy.io.wavfile.write(ckpt_path, 24000, wav_int16)
-                synth_dur = len(wav_int16) / 24000
+                sf.write(ckpt_path, wav, sr)
+                synth_dur = len(wav) / sr
                 synth_wav = ckpt_path
                 log.info(f"dub {dub_id}: seg {idx} ({speaker}) → {synth_dur:.2f}s")
             except Exception as e:
