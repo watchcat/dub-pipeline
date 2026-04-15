@@ -51,13 +51,19 @@ def _load_diarize():
     if _diarize_pipeline is None:
         from pyannote.audio import Pipeline
         # PyTorch 2.6+ changed torch.load default to weights_only=True.
-        # Pyannote checkpoints contain TorchVersion which is not in the default
-        # allowlist — register it before loading.
-        torch.serialization.add_safe_globals([torch.torch_version.TorchVersion])
+        # Pyannote checkpoints use custom classes not in the default allowlist.
+        # Temporarily patch torch.load to use weights_only=False (pyannote
+        # checkpoints are trusted — they come from Hugging Face).
+        import functools
+        _orig_load = torch.load
+        torch.load = functools.partial(_orig_load, weights_only=False)
         log.info("transcribe: loading pyannote diarization pipeline")
-        _diarize_pipeline = Pipeline.from_pretrained(
-            "pyannote/speaker-diarization-3.1",
-        )
+        try:
+            _diarize_pipeline = Pipeline.from_pretrained(
+                "pyannote/speaker-diarization-3.1",
+            )
+        finally:
+            torch.load = _orig_load
         _diarize_pipeline = _diarize_pipeline.to(torch.device(config.WHISPER_DEVICE))
     return _diarize_pipeline
 
