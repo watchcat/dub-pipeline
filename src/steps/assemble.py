@@ -15,7 +15,7 @@ import tempfile
 
 log = logging.getLogger(__name__)
 
-SAMPLE_RATE = 24000  # Hz — spec requirement
+SAMPLE_RATE = 48000  # Hz — VoxCPM2 native output
 CHANNELS = 1
 MAX_DURATION_RATIO = 1.10  # 110% of original total duration
 
