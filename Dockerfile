@@ -1,6 +1,7 @@
 # RunPod Serverless worker — GPU image for dub-pipeline
-# Models are NOT baked in; they live on a RunPod Network Volume at /runpod-volume/models
-FROM runpod/pytorch:1.0.3-cu1281-torch260-ubuntu2204
+# Models are NOT baked in; they live on a RunPod Network Volume at /runpod-volume/models (HF_HOME)
+# VoxCPM2 requires PyTorch ≥ 2.5.0
+FROM runpod/pytorch:1.0.3-cu1281-torch271-ubuntu2204
 
 WORKDIR /app
 
@@ -22,8 +23,6 @@ ENV MODEL_DIR=/runpod-volume/models
 ENV TEMP_DIR=/tmp/dub-pipeline
 ENV WHISPER_DEVICE=cuda
 ENV WHISPER_COMPUTE=float16
-ENV TTS_DEVICE=cuda
-ENV COQUI_TOS_AGREED=1
 ENV CHECKPOINT_DIR=/runpod-volume/checkpoints
 ENV XDG_DATA_HOME=/runpod-volume/models
 ENV HF_HOME=/runpod-volume/models/hf
