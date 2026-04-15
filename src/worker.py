@@ -16,7 +16,7 @@ Progress and result are reported back to buzz-bot via HTTP callbacks
 """
 import os
 import warnings
-# Set before any torch/TTS import so MPS fallback is active from the start
+# Enable MPS fallback for PyTorch ops not natively supported on Apple Silicon
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 # Suppress noisy HuggingFace tokenizer warning (pad_token == eos_token)
 warnings.filterwarnings("ignore", message=".*attention_mask.*")
@@ -29,6 +29,7 @@ import tempfile
 
 import requests
 import runpod
+import soundfile as sf
 
 from src import config, progress, storage
 from src.steps import (
@@ -301,8 +302,6 @@ def _synthesize_with_progress(
     On resume, skips already-synthesized segments.
     Returns (segments_with_synth, {idx: r2_key}).
     """
-    import soundfile as sf
-
     model = _load_model()
     sr = model.tts_model.sample_rate
     log.info(f"dub {dub_id}: synthesizing {len(segments)} segments → {language} at {sr} Hz")
@@ -349,6 +348,8 @@ def _synthesize_with_progress(
                     cfg_value=2.0,
                     inference_timesteps=10,
                 )
+                if wav is None:
+                    raise ValueError("model.generate returned None")
                 sf.write(ckpt_path, wav, sr)
                 synth_dur = len(wav) / sr
                 synth_wav = ckpt_path
