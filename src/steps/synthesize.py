@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import unicodedata
+import soundfile
 
 log = logging.getLogger(__name__)
 
@@ -35,9 +36,10 @@ def synthesize(
     speaker_samples: {speaker_id: local_wav_path}
     VoxCPM2 handles voice cloning and language detection internally.
     """
-    import soundfile
+    log.debug("synthesize: target_lang=%s ignored (VoxCPM2 auto-detects)", target_lang)
 
     model = _load_model()
+    sr = model.tts_model.sample_rate
 
     out = []
     for seg in segments:
@@ -58,8 +60,8 @@ def synthesize(
                 cfg_value=2.0,
                 inference_timesteps=10,
             )
-            soundfile.write(synth_path, wav, model.tts_model.sample_rate)
-            synth_dur = len(wav) / model.tts_model.sample_rate
+            soundfile.write(synth_path, wav, sr)
+            synth_dur = len(wav) / sr
             log.info(f"synthesize: seg {seg['idx']} ({speaker}) → {synth_dur:.2f}s")
             out.append({**seg, "synth_wav": synth_path, "synth_duration": synth_dur})
         except Exception as e:
