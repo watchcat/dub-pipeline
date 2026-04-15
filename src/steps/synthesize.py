@@ -1,32 +1,26 @@
-"""Step 5 — Synthesize translated segments with Coqui XTTS-v2 (local).
+"""Step 5 — Synthesize translated segments with VoxCPM2.
 
 For each segment, clones the speaker's voice and generates dubbed audio.
 Returns segments with "synth_wav" path added.
+VoxCPM2 auto-detects language from text — no explicit language code needed.
 """
 import logging
 import os
 import re
 import unicodedata
 
-# Must be set before PyTorch attempts any MPS op — XTTS-v2 uses conv layers
-# with >65536 output channels which are not natively supported on MPS.
-os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
-
-from src import config
-
 log = logging.getLogger(__name__)
 
-_tts_model = None
+_voxcpm_model = None
 
 
-def _load_tts():
-    global _tts_model
-    if _tts_model is None:
-        from TTS.api import TTS
-        log.info("synthesize: loading XTTS-v2")
-        _tts_model = TTS("tts_models/multilingual/multi-dataset/xtts_v2")
-        _tts_model.to(config.TTS_DEVICE)
-    return _tts_model
+def _load_model():
+    global _voxcpm_model
+    if _voxcpm_model is None:
+        from voxcpm import VoxCPM
+        log.info("synthesize: loading VoxCPM2")
+        _voxcpm_model = VoxCPM.from_pretrained("openbmb/VoxCPM2", load_denoiser=False)
+    return _voxcpm_model
 
 
 def synthesize(
@@ -37,52 +31,35 @@ def synthesize(
 ) -> list[dict]:
     """
     For each segment, synthesize translated_text using the speaker's voice sample.
-    Returns segments with "synth_wav" path added (or None if synthesis failed).
+    Returns segments with "synth_wav" and "synth_duration" added (or None on failure).
     speaker_samples: {speaker_id: local_wav_path}
+    VoxCPM2 handles voice cloning and language detection internally.
     """
-    import torch
-    import scipy.io.wavfile
+    import soundfile
 
-    tts = _load_tts()
-    model = tts.synthesizer.tts_model
-    xtts_lang = _xtts_lang_code(target_lang)
-
-    # Pre-compute speaker embeddings once per speaker (expensive — avoid per-segment).
-    speaker_latents: dict[str, tuple] = {}
-    for speaker_id, wav_path in speaker_samples.items():
-        if wav_path and os.path.exists(wav_path):
-            log.info(f"synthesize: computing embeddings for {speaker_id}")
-            gpt_cond_latent, speaker_embedding = model.get_conditioning_latents(
-                audio_path=[wav_path]
-            )
-            speaker_latents[speaker_id] = (gpt_cond_latent, speaker_embedding)
+    model = _load_model()
 
     out = []
     for seg in segments:
         speaker = seg.get("speaker", "SPEAKER_00")
-        latents = speaker_latents.get(speaker)
+        speaker_wav_path = speaker_samples.get(speaker)
         translated = _clean_for_tts(seg.get("translated_text", ""))
 
-        if not latents or not translated:
-            log.warning(f"synthesize: skipping seg {seg['idx']} — no latents or text")
-            out.append({**seg, "synth_wav": None})
+        if not speaker_wav_path or not translated:
+            log.warning(f"synthesize: skipping seg {seg['idx']} — no speaker sample or text")
+            out.append({**seg, "synth_wav": None, "synth_duration": None})
             continue
 
         synth_path = os.path.join(out_dir, f"synth_{seg['idx']:04d}.wav")
         try:
-            gpt_cond_latent, speaker_embedding = latents
-            result = model.inference(
+            wav = model.generate(
                 text=translated,
-                language=xtts_lang,
-                gpt_cond_latent=gpt_cond_latent,
-                speaker_embedding=speaker_embedding,
+                reference_wav_path=speaker_wav_path,
+                cfg_value=2.0,
+                inference_timesteps=10,
             )
-            wav = result["wav"]
-            if isinstance(wav, torch.Tensor):
-                wav = wav.cpu().numpy()
-            wav_int16 = (wav * 32767).clip(-32768, 32767).astype("int16")
-            scipy.io.wavfile.write(synth_path, 24000, wav_int16)
-            synth_dur = len(wav_int16) / 24000
+            soundfile.write(synth_path, wav, model.tts_model.sample_rate)
+            synth_dur = len(wav) / model.tts_model.sample_rate
             log.info(f"synthesize: seg {seg['idx']} ({speaker}) → {synth_dur:.2f}s")
             out.append({**seg, "synth_wav": synth_path, "synth_duration": synth_dur})
         except Exception as e:
@@ -92,7 +69,6 @@ def synthesize(
     return out
 
 
-
 def _wav_duration(path: str) -> float:
     import wave
     with wave.open(path, "rb") as wf:
@@ -100,7 +76,7 @@ def _wav_duration(path: str) -> float:
 
 
 def _clean_for_tts(text: str) -> str:
-    """Normalize text for XTTS-v2: replace Unicode punctuation that confuses the model."""
+    """Normalize Unicode punctuation that may confuse TTS models."""
     # Typographic quotes → straight quotes
     text = text.replace('\u201c', '"').replace('\u201d', '"')
     text = text.replace('\u2018', "'").replace('\u2019', "'")
@@ -113,13 +89,3 @@ def _clean_for_tts(text: str) -> str:
     # Collapse multiple spaces
     text = re.sub(r' {2,}', ' ', text)
     return text.strip()
-
-
-def _xtts_lang_code(lang: str) -> str:
-    """Map ISO 639-1 to XTTS-v2 language codes (mostly the same, a few exceptions)."""
-    mapping = {
-        "zh": "zh-cn",
-        "pt": "pt",
-        "en": "en",
-    }
-    return mapping.get(lang.lower(), lang.lower())
