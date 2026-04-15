@@ -16,6 +16,6 @@ def report(dub_id: int, step: str, pct: int | None = None):
 
 def _send(dub_id: int, step: str, payload: dict):
     try:
-        requests.post(config.PROGRESS_URL, json=payload, timeout=5)
+        requests.post(config.PROGRESS_URL, json=payload, timeout=10)
     except Exception as e:
         log.warning(f"progress report failed (dub {dub_id}, step {step}): {e}")
