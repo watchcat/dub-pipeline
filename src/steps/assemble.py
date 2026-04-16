@@ -41,8 +41,9 @@ def assemble(segments: list[dict], total_duration: float, out_dir: str) -> tuple
     # Each entry: (place_at_sec, wav_path)
     timeline: list[tuple[float, str]] = []
     synth_timeline: dict[int, float] = {}  # idx → actual start sec in dubbed audio
-    cursor = 0.0
-    prev_end = 0.0  # original end time of previous segment
+    cursor = 0.0         # ideal cursor (drives gap-compression logic)
+    actual_cursor = 0.0  # mirrors the real output position _build_timeline produces
+    prev_end = 0.0       # original end time of previous segment
 
     for seg in valid:
         orig_start   = seg["start_sec"]
@@ -52,7 +53,14 @@ def assemble(segments: list[dict], total_duration: float, out_dir: str) -> tuple
         original_gap = orig_start - prev_end   # silence before this segment in original
 
         place_at = cursor
-        synth_timeline[seg["idx"]] = place_at
+
+        # _build_timeline concatenates clips without overlap: if the ideal
+        # place_at is earlier than where we actually are in the output, the
+        # clip starts immediately after the previous one (no rewind).
+        # Track this real position so synth_start_sec matches the audio.
+        actual_start = max(place_at, actual_cursor)
+        synth_timeline[seg["idx"]] = actual_start
+        actual_cursor = actual_start + synth_dur
 
         if synth_dur > orig_dur:
             # Segment ran long — consume part of the following gap instead of overlapping
@@ -97,23 +105,26 @@ def _build_timeline(
         if place_at >= total_duration:
             break
 
-        if place_at > cursor + 0.005:
-            items.append(("silence", place_at - cursor))
+        # Clips never overlap in concat output: if the ideal place_at is
+        # behind where we already are, start immediately after the previous clip.
+        actual_start = max(place_at, cursor)
+        if actual_start > cursor + 0.005:
+            items.append(("silence", actual_start - cursor))
 
         # Trim clip if it would exceed the cap
-        clip_end = place_at + clip_dur
+        clip_end = actual_start + clip_dur
         if clip_end > total_duration:
             trimmed = os.path.join(
                 os.path.dirname(dst),
                 f"_trim_{len(items)}.wav",
             )
-            _trim_clip(wav_path, total_duration - place_at, trimmed)
+            _trim_clip(wav_path, total_duration - actual_start, trimmed)
             items.append(("clip", trimmed))
             cursor = total_duration
             break
         else:
             items.append(("clip", wav_path))
-            cursor = clip_end
+            cursor = clip_end  # = actual_start + clip_dur
 
     if cursor < total_duration - 0.005:
         items.append(("silence", total_duration - cursor))
