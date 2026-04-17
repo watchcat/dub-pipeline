@@ -25,6 +25,7 @@ import json
 import logging
 logging.getLogger("google_genai.models").setLevel(logging.WARNING)
 import shutil
+import subprocess
 import tempfile
 
 import requests
