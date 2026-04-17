@@ -184,6 +184,15 @@ def translate(segments: list[dict], source_lang: str, target_lang: str) -> list[
         )
         batch_result = _translate_batch(batch, system_prompt, prev_ctx, next_seg)
 
+        # Drop any idx values Gemini returned that are outside this batch
+        # (e.g. it sometimes echoes context segment indices).
+        batch_idx_set = {s["idx"] for s in batch}
+        spurious = [idx for idx in batch_result if idx not in batch_idx_set]
+        if spurious:
+            log.warning(f"translate: dropping spurious idx values from Gemini response: {spurious}")
+            for idx in spurious:
+                del batch_result[idx]
+
         # Detect partial responses: missing or empty translations.
         incomplete = [s for s in batch if not batch_result.get(s["idx"])]
         if incomplete:
