@@ -20,6 +20,7 @@ COPY src/ src/
 
 # Models live on the RunPod Network Volume — set at runtime via env var
 ENV MODEL_DIR=/runpod-volume/models
+ENV TORCHDYNAMO_DISABLE=1
 ENV TEMP_DIR=/tmp/dub-pipeline
 ENV WHISPER_DEVICE=cuda
 ENV WHISPER_COMPUTE=float16

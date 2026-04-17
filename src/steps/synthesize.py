@@ -18,6 +18,11 @@ _voxcpm_model = None
 def _load_model():
     global _voxcpm_model
     if _voxcpm_model is None:
+        import torch
+        # TorchDynamo can't trace set.symmetric_difference in einops (used inside
+        # VoxCPM2's warmup generate call during from_pretrained). Disable compilation;
+        # eager execution is correct and fast enough for inference.
+        torch._dynamo.config.disable = True
         from voxcpm import VoxCPM
         log.info("synthesize: loading VoxCPM2")
         _voxcpm_model = VoxCPM.from_pretrained("openbmb/VoxCPM2", load_denoiser=False)
