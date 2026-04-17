@@ -32,15 +32,20 @@ Audio URL
     │  Output: 48 kHz mono WAV per segment
     ▼
 6. Assemble
-    │  Cursor-based timeline placement:
-    │    - Segment ran long → consume following gap (no time-stretch)
-    │    - Segment ran short → insert 50% of original gap as pacing silence
-    │    - actual_cursor tracks real ffmpeg concat position for accurate synth_start_sec
-    │  Total duration capped at 150% of original
+    │  Natural-length concatenation — no time-stretching of vocals:
+    │    - Gap between segments: gap_out = min(gap_in, max(0.2, gap_in × 0.6))
+    │      Long pauses preserved at 60%; incidental gaps floored at 200 ms
+    │    - Skipped segments → silence for orig_dur + trailing_gap
+    │    - synth_start_sec recorded from real concat cursor position
+    │  Total duration is whatever falls out naturally — no cap
     │  dubbed_vocals.wav — 48 kHz mono
     ▼
 7. Mix
-    │  ffmpeg: dubbed_vocals + background at configurable volume (default 15%)
+    │  Background adjusted to match dubbed vocals duration:
+    │    - |ratio - 1| ≤ 30%: arubberband time-stretch (high quality, inaudible at 15% vol)
+    │    - ratio > 1.30: loop + 2-second fade-out
+    │    - ratio < 0.75: trim + 1-second fade-out
+    │  ffmpeg amix: dubbed_vocals + adjusted_background at configurable volume (default 15%)
     ▼
 dubbed/{episode_id}/{language}.mp3 → R2
     │
@@ -108,7 +113,6 @@ Set `RUNPOD_API_KEY` and `RUNPOD_ENDPOINT_ID` in the buzz-bot k8s secret.
 | `WHISPER_MODEL` | no | `large-v3` | WhisperX model name |
 | `WHISPER_DEVICE` | no | `cuda` | `cuda` / `cpu` |
 | `WHISPER_COMPUTE` | no | `float16` | `float16` / `int8` |
-| `MAX_DURATION_RATIO` | no | `1.5` | Max output duration as ratio of original |
 | `BG_VOLUME_DEFAULT` | no | `0.15` | Background stem volume (0.0–0.5) |
 
 ### HuggingFace setup (one-time)

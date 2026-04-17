@@ -5,8 +5,13 @@ WhisperX produces word-level timestamps so we can find natural break points:
   2. Pauses between consecutive words (gap > PAUSE_THRESHOLD)
   3. Hard cut at MAX_SEGMENT_SEC if no natural break was found
 
+Splitting serves two purposes:
+  - VoxCPM2 context limit: very long utterances degrade synthesis quality.
+  - Karaoke subtitle readability: shorter cues are easier to follow in the
+    subtitle panel. Segments are used 1:1 as subtitle cues.
+
 Splitting runs BEFORE translation so each sub-segment gets its own
-DeepL call. Indices are renumbered sequentially across the full segment
+Gemini call. Indices are renumbered sequentially across the full segment
 list after splitting.
 
 Returns a new list of segments with integer `idx` values.

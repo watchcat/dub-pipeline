@@ -219,8 +219,7 @@ def process_job(job: dict):
         # ── Step 6: Assemble ──────────────────────────────────────────────────
         current_step = "assembling"
         progress.report(dub_id, current_step)
-        total_duration = _wav_duration(vocals_wav)
-        dubbed_vocals, synth_timeline = assemble.assemble(segments, total_duration, work_dir)
+        dubbed_vocals, segments = assemble.assemble(segments, work_dir)
 
         # ── Step 7: Mix ───────────────────────────────────────────────────────
         current_step = "mixing"
@@ -234,7 +233,7 @@ def process_job(job: dict):
         r2_url = storage.upload(final_mp3, r2_key, "audio/mpeg")
         log.info(f"dub {dub_id}: uploaded → {r2_url}")
 
-        duration_sec   = _wav_duration(dubbed_vocals)
+        duration_sec   = _ffprobe_duration(final_mp3)
         segment_count  = len([s for s in segments if s.get("synth_wav")])
         speaker_count  = len(speaker_samples)
 
@@ -249,7 +248,7 @@ def process_job(job: dict):
                 "translated_text": seg.get("translated_text"),
                 "synth_r2_key":    synth_r2_keys.get(seg["idx"]),
                 "synth_duration":  seg.get("synth_duration"),
-                "synth_start_sec": synth_timeline.get(seg["idx"]),
+                "synth_start_sec": seg.get("synth_start_sec"),
             }
             for seg in segments
         ]
@@ -386,10 +385,15 @@ def _synthesize_with_progress(
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _wav_duration(path: str) -> float:
-    import wave
-    with wave.open(path, "rb") as wf:
-        return wf.getnframes() / wf.getframerate()
+def _ffprobe_duration(path: str) -> float:
+    result = subprocess.run(
+        ["ffprobe", "-v", "error",
+         "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1",
+         path],
+        capture_output=True, text=True, check=True,
+    )
+    return float(result.stdout.strip())
 
 
 def _r2_exists(key: str) -> bool:

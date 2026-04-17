@@ -1,12 +1,17 @@
 """Step 6 — Assemble synthesized segments into a single dubbed vocals track.
 
-Uses a cursor-based algorithm:
-- Segment runs long → consume the following gap to avoid time-stretching
-- Segment runs short → insert 50% of the original gap as pacing silence
-- Segments never overlap
-- Total duration capped at 110% of original
+Natural-length approach (no time-stretching of the vocals):
+- Synthesized segments are placed at their natural spoken length.
+- Gaps between segments are compressed:
+    gap_out = min(gap_in, max(0.2, gap_in * 0.6))
+  Long deliberate pauses are preserved at 60% of original; incidental gaps
+  collapse to a 200 ms minimum. Zero gap stays zero.
+- Skipped segments (synthesis failed or too short) → silence for their original
+  duration plus trailing gap, so the rhythm of skipped beats is preserved.
+- synth_start_sec on each segment records the actual position in the output.
+- Total duration is whatever falls out naturally — no cap.
 
-Output: dubbed_vocals.wav at 24 kHz mono.
+Output: dubbed_vocals.wav at 48 kHz mono.
 """
 import logging
 import os
@@ -15,133 +20,85 @@ import tempfile
 
 log = logging.getLogger(__name__)
 
-SAMPLE_RATE = 48000  # Hz — VoxCPM2 native output
+SAMPLE_RATE = 48000
 CHANNELS = 1
-MAX_DURATION_RATIO = 1.10  # 110% of original total duration
+MIN_GAP = 0.2    # minimum compressed inter-segment gap (seconds)
+GAP_RATIO = 0.6  # proportion of original gap to preserve
 
 
-def assemble(segments: list[dict], total_duration: float, out_dir: str) -> tuple[str, dict[int, float]]:
+def assemble(segments: list[dict], out_dir: str) -> tuple[str, list[dict]]:
     """
-    Build dubbed_vocals.wav by placing synthesized clips on a timeline.
+    Build dubbed_vocals.wav by concatenating synthesized clips with compressed gaps.
 
-    segments: list of dicts with keys: idx, start_sec, end_sec, synth_wav,
-              synth_duration (may be None if synthesis failed).
-    total_duration: original episode duration in seconds.
-    Returns (path to assembled WAV, {segment_idx: actual_start_sec_in_dubbed_audio}).
+    segments: list of dicts — must have start_sec, end_sec, and optionally
+              synth_wav / synth_duration (set by the synthesize step).
+    Returns (path to assembled WAV, updated segments with synth_start_sec populated).
+    Segments without synth audio have synth_start_sec = None.
     """
-    valid = [s for s in segments if s.get("synth_wav") and s.get("synth_duration")]
-    if not valid:
+    segs = sorted(segments, key=lambda s: s["start_sec"])
+    if not any(s.get("synth_wav") for s in segs):
         raise RuntimeError("assemble: no synthesized segments to assemble")
 
-    valid.sort(key=lambda s: s["start_sec"])
+    items: list[tuple] = []  # ("silence", dur_sec) | ("clip", path)
+    cursor = 0.0        # running position in the output file
+    prev_orig_end = 0.0  # end_sec of last processed original segment
 
-    max_output_duration = total_duration * MAX_DURATION_RATIO
+    for i, seg in enumerate(segs):
+        orig_start = seg["start_sec"]
+        orig_end   = seg["end_sec"]
+        orig_dur   = orig_end - orig_start
+        gap_in     = max(0.0, orig_start - prev_orig_end)
+        has_synth  = bool(seg.get("synth_wav") and seg.get("synth_duration"))
 
-    # ── Cursor-based placement ────────────────────────────────────────────────
-    # Each entry: (place_at_sec, wav_path)
-    timeline: list[tuple[float, str]] = []
-    synth_timeline: dict[int, float] = {}  # idx → actual start sec in dubbed audio
-    cursor = 0.0         # ideal cursor (drives gap-compression logic)
-    actual_cursor = 0.0  # mirrors the real output position _build_timeline produces
-    prev_end = 0.0       # original end time of previous segment
+        if has_synth:
+            gap_out = _compress_gap(gap_in)
+            if gap_out > 0.005:
+                items.append(("silence", gap_out))
+                cursor += gap_out
 
-    for seg in valid:
-        orig_start   = seg["start_sec"]
-        orig_end     = seg["end_sec"]
-        orig_dur     = orig_end - orig_start
-        synth_dur    = seg["synth_duration"]
-        original_gap = orig_start - prev_end   # silence before this segment in original
+            seg["synth_start_sec"] = cursor
+            items.append(("clip", seg["synth_wav"]))
+            cursor += float(seg["synth_duration"])
+            prev_orig_end = orig_end
 
-        place_at = cursor
-
-        # _build_timeline concatenates clips without overlap: if the ideal
-        # place_at is earlier than where we actually are in the output, the
-        # clip starts immediately after the previous one (no rewind).
-        # Track this real position so synth_start_sec matches the audio.
-        actual_start = max(place_at, actual_cursor)
-        synth_timeline[seg["idx"]] = actual_start
-        actual_cursor = actual_start + synth_dur
-
-        if synth_dur > orig_dur:
-            # Segment ran long — consume part of the following gap instead of overlapping
-            overshoot    = synth_dur - orig_dur
-            compression  = min(original_gap, overshoot)
-            cursor      += synth_dur - compression
         else:
-            # Segment ran short — preserve 50% of original pacing gap
-            silence = original_gap * 0.5
-            cursor += synth_dur + silence
-
-        timeline.append((place_at, seg["synth_wav"]))
-        prev_end = orig_end
-
-    # ── Duration cap ─────────────────────────────────────────────────────────
-    actual_end = cursor
-    if actual_end > max_output_duration:
-        log.warning(
-            f"assemble: output {actual_end:.1f}s > 110% of original {total_duration:.1f}s "
-            f"({max_output_duration:.1f}s) — truncating"
-        )
-        actual_end = max_output_duration
+            # Skipped segment — preserve its time slot as silence.
+            # Consume leading gap + original duration + trailing gap so the
+            # next segment's gap_in is naturally 0.
+            next_orig_start = segs[i + 1]["start_sec"] if i + 1 < len(segs) else orig_end
+            trailing_gap    = max(0.0, next_orig_start - orig_end)
+            silence_dur     = gap_in + orig_dur + trailing_gap
+            if silence_dur > 0.005:
+                items.append(("silence", silence_dur))
+                cursor += silence_dur
+            seg["synth_start_sec"] = None
+            prev_orig_end = next_orig_start
 
     out_path = os.path.join(out_dir, "dubbed_vocals.wav")
-    _build_timeline(timeline, actual_end, out_path)
-    return out_path, synth_timeline
+    _ffmpeg_concat(items, out_path)
+
+    n_clips = sum(1 for s in segs if s.get("synth_wav"))
+    log.info(f"assemble: {out_path} ({cursor:.1f}s, {n_clips} clips)")
+    return out_path, segs
 
 
-def _build_timeline(
-    timeline: list[tuple[float, str]],
-    total_duration: float,
-    dst: str,
-):
-    """Interleave silence + clips to match the computed placement positions."""
-    items: list[tuple[str, float | str]] = []  # ("silence", secs) | ("clip", path)
-    cursor = 0.0
-
-    for place_at, wav_path in timeline:
-        clip_dur = _wav_duration(wav_path)
-
-        # Guard: skip clips that start beyond the output duration cap
-        if place_at >= total_duration:
-            break
-
-        # Clips never overlap in concat output: if the ideal place_at is
-        # behind where we already are, start immediately after the previous clip.
-        actual_start = max(place_at, cursor)
-        if actual_start > cursor + 0.005:
-            items.append(("silence", actual_start - cursor))
-
-        # Trim clip if it would exceed the cap
-        clip_end = actual_start + clip_dur
-        if clip_end > total_duration:
-            trimmed = os.path.join(
-                os.path.dirname(dst),
-                f"_trim_{len(items)}.wav",
-            )
-            _trim_clip(wav_path, total_duration - actual_start, trimmed)
-            items.append(("clip", trimmed))
-            cursor = total_duration
-            break
-        else:
-            items.append(("clip", wav_path))
-            cursor = clip_end  # = actual_start + clip_dur
-
-    if cursor < total_duration - 0.005:
-        items.append(("silence", total_duration - cursor))
-
-    _ffmpeg_concat(items, dst)
+def _compress_gap(gap_in: float) -> float:
+    """Compress an inter-segment gap: 60% of original, min 200 ms, 0 if no gap."""
+    if gap_in <= 0.005:
+        return 0.0
+    return min(gap_in, max(MIN_GAP, gap_in * GAP_RATIO))
 
 
 def _ffmpeg_concat(items: list[tuple], dst: str):
     with tempfile.TemporaryDirectory() as tmpdir:
         inputs = []
-        for i, (kind, val) in enumerate(items):
-            if kind == "silence":
+        for i, item in enumerate(items):
+            if item[0] == "silence":
                 sil = os.path.join(tmpdir, f"sil_{i}.wav")
-                _generate_silence(float(val), sil)
+                _generate_silence(float(item[1]), sil)
                 inputs.append(sil)
             else:
-                inputs.append(str(val))
+                inputs.append(str(item[1]))
 
         list_path = os.path.join(tmpdir, "concat.txt")
         with open(list_path, "w") as f:
@@ -149,34 +106,19 @@ def _ffmpeg_concat(items: list[tuple], dst: str):
                 f.write(f"file '{p}'\n")
 
         subprocess.run(
-            ["ffmpeg", "-y", "-f", "concat", "-safe", "0",
-             "-i", list_path,
+            ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+             "-f", "concat", "-safe", "0", "-i", list_path,
              "-ar", str(SAMPLE_RATE), "-ac", str(CHANNELS),
              "-sample_fmt", "s16", "-c:a", "pcm_s16le", dst],
-            check=True, capture_output=True,
+            check=True,
         )
 
 
 def _generate_silence(duration: float, path: str):
     subprocess.run(
-        ["ffmpeg", "-y",
+        ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
          "-f", "lavfi", "-i", f"anullsrc=r={SAMPLE_RATE}:cl=mono",
          "-t", str(duration),
          "-sample_fmt", "s16", "-c:a", "pcm_s16le", path],
-        check=True, capture_output=True,
+        check=True,
     )
-
-
-def _trim_clip(src: str, duration: float, dst: str):
-    subprocess.run(
-        ["ffmpeg", "-y", "-i", src, "-t", str(duration),
-         "-ar", str(SAMPLE_RATE), "-ac", str(CHANNELS),
-         "-sample_fmt", "s16", "-c:a", "pcm_s16le", dst],
-        check=True, capture_output=True,
-    )
-
-
-def _wav_duration(path: str) -> float:
-    import wave
-    with wave.open(path, "rb") as wf:
-        return wf.getnframes() / wf.getframerate()
