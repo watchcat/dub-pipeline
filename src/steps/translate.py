@@ -133,9 +133,10 @@ _RESPONSE_SCHEMA = types.Schema(
 )
 
 _MAX_RETRIES = 3
-_RETRY_DELAY = 10   # seconds, doubled on each retry
+_RETRY_DELAY = 10    # seconds, doubled on each retry
 _FALLBACK_MODEL = "gemini-2.0-flash"
-_BATCH_SIZE = 50    # segments per Gemini call
+_BATCH_SIZE = 20     # segments per Gemini call (smaller = less output token pressure)
+_MIN_COVERAGE = 1.0  # require 100% of segments translated; retry missing ones
 
 
 def translate(segments: list[dict], source_lang: str, target_lang: str) -> list[dict]:
@@ -182,8 +183,23 @@ def translate(segments: list[dict], source_lang: str, target_lang: str) -> list[
             f"segs {batch_start}–{batch_start + len(batch) - 1}"
         )
         batch_result = _translate_batch(batch, system_prompt, prev_ctx, next_seg)
-        translations.update(batch_result)
 
+        # Detect partial responses: missing or empty translations.
+        incomplete = [s for s in batch if not batch_result.get(s["idx"])]
+        if incomplete:
+            log.warning(
+                f"translate: {len(incomplete)}/{len(batch)} segments missing or empty "
+                f"— retrying individually"
+            )
+            for seg in incomplete:
+                retry_result = _translate_batch([seg], system_prompt, prev_ctx, next_seg=None)
+                if retry_result.get(seg["idx"]):
+                    batch_result[seg["idx"]] = retry_result[seg["idx"]]
+                else:
+                    log.error(f"translate: seg {seg['idx']} still empty after retry — using source text")
+                    batch_result[seg["idx"]] = seg["text"]
+
+        translations.update(batch_result)
         for seg in batch:
             recent_translated.append({
                 "text":            seg["text"],
@@ -193,10 +209,7 @@ def translate(segments: list[dict], source_lang: str, target_lang: str) -> list[
     out = []
     for i, seg in enumerate(segments):
         idx = seg.get("idx", i)
-        translated = translations.get(idx)
-        if translated is None:
-            log.warning(f"translate: seg {idx} missing from Gemini response, using empty string")
-            translated = ""
+        translated = translations.get(idx) or ""
         out.append({**seg, "translated_text": translated})
 
     log.info("translate: done")
