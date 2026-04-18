@@ -557,7 +557,7 @@ def _synth_one_segment(
 
         # Atomic write: temp + rename so partial files never look like valid checkpoints
         tmp_path = ckpt_path + ".tmp"
-        sf.write(tmp_path, wav, sr)
+        sf.write(tmp_path, wav, sr, format="WAV")
         os.replace(tmp_path, ckpt_path)
         synth_dur = len(wav) / sr
         synth_wav = ckpt_path
