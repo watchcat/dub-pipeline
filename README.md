@@ -26,10 +26,17 @@ Audio URL
     │  segments: [{..., translated_text}, ...]
     │  Same-language dubs copy text verbatim — no API call
     ▼
-5. Synthesize (VoxCPM2, per segment)
+5. Synthesize (VoxCPM2, per segment, context-aware)
     │  Speaker voice cloned from sample; VoxCPM2 auto-detects target language
+    │  Each segment synthesized as prosodic continuation of prior same-speaker
+    │    segments (prompt_wav_path + prompt_text) — up to 2 prior segs, ≤ 20 s,
+    │    ≤ 10 s original-timeline gap. Falls back to isolated mode if no valid
+    │    prior context (first segment, speaker gap, all prior segs skipped).
+    │  Speakers processed in parallel (SYNTH_PARALLEL_SPEAKERS); within each
+    │    speaker segments are strictly ordered (context dependency).
     │  Segments < 0.5 s skipped (silence placeholder)
     │  Output: 48 kHz mono WAV per segment
+    │  Debug artifacts: TEMP_DIR/synth_debug/{idx:04d}.json per segment
     ▼
 6. Assemble
     │  Natural-length concatenation — no time-stretching of vocals:
@@ -42,7 +49,7 @@ Audio URL
     ▼
 7. Mix
     │  Background adjusted to match dubbed vocals duration:
-    │    - |ratio - 1| ≤ 30%: arubberband time-stretch (high quality, inaudible at 15% vol)
+    │    - |ratio - 1| ≤ 30%: atempo time-stretch (inaudible at 15% vol)
     │    - ratio > 1.30: loop + 2-second fade-out
     │    - ratio < 0.75: trim + 1-second fade-out
     │  ffmpeg amix: dubbed_vocals + adjusted_background at configurable volume (default 15%)
@@ -114,6 +121,12 @@ Set `RUNPOD_API_KEY` and `RUNPOD_ENDPOINT_ID` in the buzz-bot k8s secret.
 | `WHISPER_DEVICE` | no | `cuda` | `cuda` / `cpu` |
 | `WHISPER_COMPUTE` | no | `float16` | `float16` / `int8` |
 | `BG_VOLUME_DEFAULT` | no | `0.15` | Background stem volume (0.0–0.5) |
+| `SYNTH_CONTEXT_MAX_SEGMENTS` | no | `2` | Max prior same-speaker segments used as prosodic prompt |
+| `SYNTH_CONTEXT_MAX_DURATION_SEC` | no | `20.0` | Max total prompt audio duration (seconds) |
+| `SYNTH_CONTEXT_MAX_GAP_SEC` | no | `10.0` | Skip context if original-timeline gap exceeds this |
+| `SYNTH_PARALLEL_SPEAKERS` | no | `true` | Process speakers in parallel (one thread per speaker) |
+| `SYNTH_CFG_VALUE` | no | `2.0` | VoxCPM2 CFG scale |
+| `SYNTH_INFERENCE_TIMESTEPS` | no | `10` | VoxCPM2 inference timesteps |
 
 ### HuggingFace setup (one-time)
 
