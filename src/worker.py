@@ -420,6 +420,14 @@ def _synthesize_with_progress(
         out_by_idx.get(seg["idx"], {**seg, "synth_wav": None, "synth_duration": None})
         for seg in segments
     ]
+
+    synth_count = sum(1 for s in out if s.get("synth_wav"))
+    skip_count  = total - synth_count
+    log.info(
+        f"dub {dub_id}: synthesis complete — "
+        f"{synth_count}/{total} synthesized ({synth_count * 100 // total}%), "
+        f"{skip_count} skipped"
+    )
     return out, synth_r2_keys
 
 
