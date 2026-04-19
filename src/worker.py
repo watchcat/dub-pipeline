@@ -554,6 +554,10 @@ def _synth_one_segment(
             reference_wav_path=sample_path,
             cfg_value=config.SYNTH_CFG_VALUE,
             inference_timesteps=config.SYNTH_INFERENCE_TIMESTEPS,
+            normalize=True,   # expand digits/dates/currency to words in target language
+            denoise=True,     # speaker sample is extracted from real podcast audio; denoise it
+                              # (prompt_wav is already clean synth output — model applies
+                              #  denoising only to reference_wav when both are present)
         )
         if prompt_wav and prompt_text:
             kwargs["prompt_wav_path"] = prompt_wav
