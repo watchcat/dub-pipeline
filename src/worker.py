@@ -362,8 +362,13 @@ def _synthesize_with_progress(
             if r2_key:
                 synth_r2_keys[result_seg["idx"]] = r2_key
             completed[0] += 1
-            pct = int(completed[0] / total * 100)
+            n   = completed[0]
+            pct = int(n / total * 100)
+            prev_pct = int((n - 1) / total * 100)
+            crossed_milestone = (pct // 10) > (prev_pct // 10)
         progress.report(dub_id, "synthesizing", pct)
+        if crossed_milestone:
+            log.info(f"dub {dub_id}: synthesizing {pct}% ({n}/{total})")
 
     def process_speaker(speaker_id: str, spk_segs: list[dict]):
         sample_path = speaker_samples.get(speaker_id)
