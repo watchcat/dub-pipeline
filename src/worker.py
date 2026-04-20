@@ -370,7 +370,9 @@ def _synthesize_with_progress(
                     log.warning(f"dub {dub_id}: seg {idx} R2 upload failed, will retry: {e}")
 
         pct = int((i + 1) / total * 100)
-        progress.report(dub_id, "synthesizing", pct)
+        prev_pct = int(i / total * 100)
+        if pct // 10 != prev_pct // 10 or i == total - 1:
+            progress.report(dub_id, "synthesizing", pct)
         out.append({**seg, "synth_wav": synth_wav, "synth_duration": synth_dur})
 
     # Retry any R2 uploads that failed during synthesis
