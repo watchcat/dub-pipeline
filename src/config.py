@@ -35,11 +35,3 @@ BG_VOLUME_DEFAULT  = float(os.environ.get("BG_VOLUME_DEFAULT", "0.15"))
 # Segment duration constraints
 MAX_SEGMENT_SEC  = 30.0   # split longer segments before synthesis
 MIN_SEGMENT_SEC  = 0.5    # skip synthesis below this, insert silence
-
-# Synthesis context (prosodic continuation via VoxCPM2 prompt_wav_path)
-SYNTH_CONTEXT_MAX_SEGMENTS     = int(os.environ.get("SYNTH_CONTEXT_MAX_SEGMENTS", "2"))
-SYNTH_CONTEXT_MAX_DURATION_SEC = float(os.environ.get("SYNTH_CONTEXT_MAX_DURATION_SEC", "20.0"))
-SYNTH_CONTEXT_MAX_GAP_SEC      = float(os.environ.get("SYNTH_CONTEXT_MAX_GAP_SEC", "10.0"))
-SYNTH_PARALLEL_SPEAKERS        = os.environ.get("SYNTH_PARALLEL_SPEAKERS", "true").lower() == "true"
-SYNTH_CFG_VALUE                = float(os.environ.get("SYNTH_CFG_VALUE", "2.0"))
-SYNTH_INFERENCE_TIMESTEPS      = int(os.environ.get("SYNTH_INFERENCE_TIMESTEPS", "10"))
