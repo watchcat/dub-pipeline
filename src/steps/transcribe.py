@@ -92,6 +92,7 @@ def transcribe(vocals_wav: str) -> tuple[list[dict], str]:
         vocals_wav,
         word_timestamps=True,
         vad_filter=True,
+        beam_size=10,
     )
     language = info.language
     raw_segments = list(raw_segments_iter)
