@@ -12,11 +12,42 @@ import time
 from google import genai
 from google.genai import types
 
+import re
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
 from src import config
 
 log = logging.getLogger(__name__)
 
 _client = genai.Client(api_key=config.GEMINI_API_KEY)
+
+# ── HY-MT model (lazy-loaded on first use) ───────────────────────────────────
+
+_hymt_model = None
+_hymt_tokenizer = None
+
+
+def _load_hymt():
+    """Load HY-MT model and tokenizer once, keep in GPU memory."""
+    global _hymt_model, _hymt_tokenizer
+    if _hymt_model is not None:
+        return _hymt_model, _hymt_tokenizer
+
+    log.info(f"translate: loading HY-MT model {config.HYMT_MODEL}")
+    _hymt_tokenizer = AutoTokenizer.from_pretrained(
+        config.HYMT_MODEL, trust_remote_code=True,
+    )
+    _hymt_model = AutoModelForCausalLM.from_pretrained(
+        config.HYMT_MODEL,
+        torch_dtype=torch.float16,
+        device_map="auto",
+        trust_remote_code=True,
+    )
+    _hymt_model.eval()
+    log.info("translate: HY-MT model loaded")
+    return _hymt_model, _hymt_tokenizer
+
 
 _LANG_NAMES = {
     "en": "English",  "es": "Spanish",  "fr": "French",   "de": "German",
@@ -297,3 +328,105 @@ def _translate_batch(
                     log.error(f"translate: {model} failed all retries: {exc} — trying fallback")
 
     raise last_exc
+
+
+_HYMT_PROMPT_TEMPLATE = """\
+Translate the following podcast transcript segments from {source_language} to {target_language}.
+Maintain the speaker's tone and style. Translate only the TRANSLATE segments.
+
+{context_block}TRANSLATE:
+{translate_block}
+Output format: one translation per line, prefixed with idx.
+{format_block}"""
+
+
+def _build_hymt_prompt(
+    batch: list[dict],
+    source_lang: str,
+    target_lang: str,
+    prev_ctx: list[dict],
+    next_seg: dict | None,
+) -> str:
+    src_name = _LANG_NAMES.get(source_lang.lower(), source_lang)
+    tgt_name = _LANG_NAMES.get(target_lang.lower(), target_lang)
+
+    context_lines = []
+    if prev_ctx:
+        context_lines.append("CONTEXT (already translated):")
+        for i, ctx in enumerate(prev_ctx, 1):
+            context_lines.append(f"[{i}] {ctx['translated_text']}")
+        context_lines.append("")
+    context_block = "\n".join(context_lines) + "\n" if context_lines else ""
+
+    translate_lines = []
+    for seg in batch:
+        speaker_tag = f" [{seg['speaker']}]" if seg.get("speaker") else ""
+        translate_lines.append(f"[idx={seg['idx']}]{speaker_tag}: {seg['text']}")
+
+    next_block = ""
+    if next_seg:
+        translate_lines.append("")
+        translate_lines.append(f"NEXT (for context only):")
+        translate_lines.append(next_seg["text"])
+
+    format_lines = [f"[idx={seg['idx']}]: <target>translated text</target>" for seg in batch]
+
+    return _HYMT_PROMPT_TEMPLATE.format(
+        source_language=src_name,
+        target_language=tgt_name,
+        context_block=context_block,
+        translate_block="\n".join(translate_lines),
+        format_block="\n".join(format_lines),
+    )
+
+
+_HYMT_TARGET_RE = re.compile(r"\[idx=(\d+)\]:\s*<target>(.*?)</target>")
+
+
+def _translate_hymt_batch(
+    segments: list[dict],
+    source_lang: str,
+    target_lang: str,
+    prev_ctx: list[dict],
+    next_seg: dict | None,
+) -> dict[int, str]:
+    """Translate one batch using the local HY-MT model. Returns {idx: translated_text}."""
+    model, tokenizer = _load_hymt()
+    prompt = _build_hymt_prompt(segments, source_lang, target_lang, prev_ctx, next_seg)
+
+    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+    with torch.no_grad():
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=2048,
+            temperature=0.2,
+            do_sample=True,
+            top_p=0.9,
+        )
+
+    # Decode only the generated tokens (skip the prompt)
+    generated = outputs[0][inputs["input_ids"].shape[1]:]
+    response = tokenizer.decode(generated, skip_special_tokens=True).strip()
+
+    out: dict[int, str] = {}
+    for match in _HYMT_TARGET_RE.finditer(response):
+        idx = int(match.group(1))
+        text = match.group(2).strip()
+        if text:
+            out[idx] = text
+
+    if not out:
+        # Fallback: if no <target> tags found, try to parse as plain text lines
+        # This handles cases where the model doesn't follow the exact format
+        log.warning("translate: HY-MT response had no <target> tags, attempting line parse")
+        lines = response.strip().splitlines()
+        idx_re = re.compile(r"\[idx=(\d+)\]:\s*(.*)")
+        for line in lines:
+            m = idx_re.match(line.strip())
+            if m:
+                idx = int(m.group(1))
+                text = m.group(2).strip()
+                if text:
+                    out[idx] = text
+
+    return out
