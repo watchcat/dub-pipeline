@@ -172,17 +172,97 @@ _MIN_COVERAGE = 1.0  # require 100% of segments translated; retry missing ones
 
 def translate(segments: list[dict], source_lang: str, target_lang: str) -> list[dict]:
     """
-    Translate all segments from source_lang to target_lang using Gemini Flash.
-    Returns segments with "translated_text" added.
+    Translate all segments from source_lang to target_lang.
+    Tier 1 languages use local HY-MT model; Tier 2 uses Gemini Flash.
     Same-language jobs copy text verbatim.
     """
     if source_lang.lower() == target_lang.lower():
         log.info(f"translate: source == target ({source_lang}), copying text verbatim")
         return [{**seg, "translated_text": seg["text"]} for seg in segments]
 
+    use_hymt = target_lang.lower() in config.HYMT_LANGUAGES
     src_name = _LANG_NAMES.get(source_lang.lower(), source_lang)
     tgt_name = _LANG_NAMES.get(target_lang.lower(), target_lang)
-    log.info(f"translate: {len(segments)} segments, {src_name} → {tgt_name} via Gemini")
+    backend = "HY-MT" if use_hymt else "Gemini"
+    log.info(f"translate: {len(segments)} segments, {src_name} → {tgt_name} via {backend}")
+
+    if not use_hymt:
+        return _translate_gemini(segments, source_lang, target_lang)
+
+    # HY-MT path
+    input_segs = [
+        {
+            "idx":     seg.get("idx", i),
+            "text":    seg.get("text", "").strip(),
+            "speaker": seg.get("speaker", ""),
+        }
+        for i, seg in enumerate(segments)
+    ]
+
+    translations: dict[int, str] = {}
+    recent_translated: list[dict] = []
+
+    for batch_start in range(0, len(input_segs), _BATCH_SIZE):
+        batch = input_segs[batch_start : batch_start + _BATCH_SIZE]
+        prev_ctx = recent_translated[-2:]
+        next_idx = batch_start + len(batch)
+        next_seg = input_segs[next_idx] if next_idx < len(input_segs) else None
+
+        log.info(
+            f"translate: HY-MT batch {batch_start // _BATCH_SIZE + 1}, "
+            f"segs {batch_start}–{batch_start + len(batch) - 1}"
+        )
+        batch_result = _translate_hymt_batch(batch, source_lang, target_lang, prev_ctx, next_seg)
+
+        # Drop spurious idx values outside this batch
+        batch_idx_set = {s["idx"] for s in batch}
+        spurious = [idx for idx in batch_result if idx not in batch_idx_set]
+        if spurious:
+            log.warning(f"translate: dropping spurious idx values: {spurious}")
+            for idx in spurious:
+                del batch_result[idx]
+
+        # Retry missing segments individually
+        incomplete = [s for s in batch if not batch_result.get(s["idx"])]
+        if incomplete:
+            log.warning(
+                f"translate: {len(incomplete)}/{len(batch)} segments missing "
+                f"— retrying individually"
+            )
+            for seg in incomplete:
+                retry_result = _translate_hymt_batch([seg], source_lang, target_lang, prev_ctx, next_seg=None)
+                if retry_result.get(seg["idx"]):
+                    batch_result[seg["idx"]] = retry_result[seg["idx"]]
+                else:
+                    log.error(f"translate: seg {seg['idx']} still empty after retry — using source text")
+                    batch_result[seg["idx"]] = seg["text"]
+
+        translations.update(batch_result)
+        for seg in batch:
+            recent_translated.append({
+                "text":            seg["text"],
+                "translated_text": batch_result.get(seg["idx"], ""),
+            })
+
+    out = []
+    for i, seg in enumerate(segments):
+        idx = seg.get("idx", i)
+        translated = translations.get(idx) or ""
+        out.append({**seg, "translated_text": translated})
+
+    log.info("translate: done")
+    if out:
+        log.info(
+            f"translate: sample — '{out[0].get('text','')[:60]}' "
+            f"→ '{out[0].get('translated_text','')[:60]}'"
+        )
+    return out
+
+
+def _translate_gemini(segments: list[dict], source_lang: str, target_lang: str) -> list[dict]:
+    """Gemini Flash translation path — used for Tier 2 languages."""
+    src_name = _LANG_NAMES.get(source_lang.lower(), source_lang)
+    tgt_name = _LANG_NAMES.get(target_lang.lower(), target_lang)
 
     system_prompt = (
         _SYSTEM_PROMPT_TEMPLATE
