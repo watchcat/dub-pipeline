@@ -166,7 +166,8 @@ _RESPONSE_SCHEMA = types.Schema(
 _MAX_RETRIES = 3
 _RETRY_DELAY = 10    # seconds, doubled on each retry
 _FALLBACK_MODEL = "gemini-2.0-flash"
-_BATCH_SIZE = 20     # segments per Gemini call (smaller = less output token pressure)
+_BATCH_SIZE = 20        # segments per Gemini call (smaller = less output token pressure)
+_HYMT_BATCH_SIZE = 5    # segments per HY-MT call (1.8B model has limited context)
 _MIN_COVERAGE = 1.0  # require 100% of segments translated; retry missing ones
 
 
@@ -202,14 +203,14 @@ def translate(segments: list[dict], source_lang: str, target_lang: str) -> list[
     translations: dict[int, str] = {}
     recent_translated: list[dict] = []
 
-    for batch_start in range(0, len(input_segs), _BATCH_SIZE):
-        batch = input_segs[batch_start : batch_start + _BATCH_SIZE]
+    for batch_start in range(0, len(input_segs), _HYMT_BATCH_SIZE):
+        batch = input_segs[batch_start : batch_start + _HYMT_BATCH_SIZE]
         prev_ctx = recent_translated[-2:]
         next_idx = batch_start + len(batch)
         next_seg = input_segs[next_idx] if next_idx < len(input_segs) else None
 
         log.info(
-            f"translate: HY-MT batch {batch_start // _BATCH_SIZE + 1}, "
+            f"translate: HY-MT batch {batch_start // _HYMT_BATCH_SIZE + 1}, "
             f"segs {batch_start}–{batch_start + len(batch) - 1}"
         )
         batch_result = _translate_hymt_batch(batch, source_lang, target_lang, prev_ctx, next_seg)
@@ -443,7 +444,6 @@ def _build_hymt_prompt(
         speaker_tag = f" [{seg['speaker']}]" if seg.get("speaker") else ""
         translate_lines.append(f"[idx={seg['idx']}]{speaker_tag}: {seg['text']}")
 
-    next_block = ""
     if next_seg:
         translate_lines.append("")
         translate_lines.append(f"NEXT (for context only):")
@@ -460,7 +460,7 @@ def _build_hymt_prompt(
     )
 
 
-_HYMT_TARGET_RE = re.compile(r"\[idx=(\d+)\]:\s*<target>(.*?)</target>")
+_HYMT_TARGET_RE = re.compile(r"\[idx=(\d+)\]:\s*<target>(.*?)</target>", re.DOTALL)
 
 
 def _translate_hymt_batch(
@@ -474,19 +474,26 @@ def _translate_hymt_batch(
     model, tokenizer = _load_hymt()
     prompt = _build_hymt_prompt(segments, source_lang, target_lang, prev_ctx, next_seg)
 
-    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-    with torch.no_grad():
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens=2048,
-            temperature=0.2,
-            do_sample=True,
-            top_p=0.9,
-        )
+    try:
+        inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+        with torch.no_grad():
+            outputs = model.generate(
+                **inputs,
+                max_new_tokens=2048,
+                temperature=0.2,
+                do_sample=True,
+                top_p=0.9,
+            )
 
-    # Decode only the generated tokens (skip the prompt)
-    generated = outputs[0][inputs["input_ids"].shape[1]:]
-    response = tokenizer.decode(generated, skip_special_tokens=True).strip()
+        # Decode only the generated tokens (skip the prompt)
+        generated = outputs[0][inputs["input_ids"].shape[1]:]
+        response = tokenizer.decode(generated, skip_special_tokens=True).strip()
+    except Exception as exc:
+        log.error(f"translate: HY-MT inference failed: {exc}")
+        return {}
+    finally:
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     out: dict[int, str] = {}
     for match in _HYMT_TARGET_RE.finditer(response):
