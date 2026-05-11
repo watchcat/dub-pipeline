@@ -22,9 +22,11 @@ Audio URL
 3b. Split long segments
     │  Segments > 30 s split at sentence/pause boundaries (VoxCPM2 context limit)
     ▼
-4. Translate (Gemini Flash, batch with context)
+4. Translate (HY-MT local or Gemini Flash, batch with context)
     │  segments: [{..., translated_text}, ...]
-    │  Same-language dubs copy text verbatim — no API call
+    │  Tier 1 languages → HY-MT 1.5 (local GPU, zero API cost)
+    │  Tier 2 languages → Gemini Flash (API)
+    │  Same-language dubs copy text verbatim — no model call
     ▼
 5. Synthesize (VoxCPM2, per segment, context-aware)
     │  Speaker voice cloned from sample; VoxCPM2 auto-detects target language
@@ -113,8 +115,10 @@ Set `RUNPOD_API_KEY` and `RUNPOD_ENDPOINT_ID` in the buzz-bot k8s secret.
 | `R2_SECRET_ACCESS_KEY` | yes | — | R2 API token secret |
 | `R2_BUCKET` | yes | — | R2 bucket name |
 | `R2_PUBLIC_URL` | yes | — | Public base URL for R2 objects |
-| `GEMINI_API_KEY` | yes | — | Google Gemini API key |
-| `GEMINI_MODEL` | no | `gemini-2.5-flash` | Gemini model for translation |
+| `GEMINI_API_KEY` | yes | — | Google Gemini API key (Tier 2 translation) |
+| `GEMINI_MODEL` | no | `gemini-2.5-flash` | Gemini model for Tier 2 translation |
+| `HYMT_MODEL` | no | `Tencent-Hunyuan/HunyuanTranslate-1.8B` | HY-MT model for Tier 1 translation |
+| `HYMT_LANGUAGES` | no | `en,es,fr,de,it,pt,ru,zh,ja,ko,nl` | Comma-separated Tier 1 language codes |
 | `HF_TOKEN` | yes | — | HuggingFace token (pyannote diarization models) |
 | `DEMUCS_MODEL` | no | `htdemucs_ft` | Demucs model name |
 | `WHISPER_MODEL` | no | `large-v3` | WhisperX model name |
@@ -127,6 +131,17 @@ Set `RUNPOD_API_KEY` and `RUNPOD_ENDPOINT_ID` in the buzz-bot k8s secret.
 | `SYNTH_PARALLEL_SPEAKERS` | no | `true` | Process speakers in parallel (one thread per speaker) |
 | `SYNTH_CFG_VALUE` | no | `2.0` | VoxCPM2 CFG scale |
 | `SYNTH_INFERENCE_TIMESTEPS` | no | `10` | VoxCPM2 inference timesteps |
+
+### Translation backends
+
+The pipeline uses two translation backends:
+
+| Backend | Languages | Config |
+|---------|-----------|--------|
+| **HY-MT 1.5** (local, GPU) | en, es, fr, de, it, pt, ru, zh, ja, ko, nl | `HYMT_MODEL`, `HYMT_LANGUAGES` |
+| **Gemini Flash** (API) | pl, tr, cs, hu | `GEMINI_API_KEY`, `GEMINI_MODEL` |
+
+To move a language between tiers, edit `HYMT_LANGUAGES` (comma-separated list) in the RunPod endpoint environment. No code change needed. The HY-MT model downloads to `HF_HOME` on first use and is cached on the Network Volume.
 
 ### HuggingFace setup (one-time)
 
@@ -237,7 +252,7 @@ src/
         transcribe.py       — WhisperX transcription + pyannote diarization
         extract_samples.py  — voice clip extraction per speaker
         split_segments.py   — split long segments at sentence boundaries
-        translate.py        — Gemini batch translation
+        translate.py        — Dual-backend translation (HY-MT Tier 1 / Gemini Tier 2)
         synthesize.py       — VoxCPM2 voice cloning + synthesis
         assemble.py         — cursor-based timeline assembly with actual_cursor tracking
         mix.py              — ffmpeg stem mixing
