@@ -444,13 +444,14 @@ def _translate_hymt_batch(
     for seg in segments:
         messages = _build_hymt_message(seg["text"], target_lang, source_lang)
         try:
-            input_ids = tokenizer.apply_chat_template(
+            tokenized = tokenizer.apply_chat_template(
                 messages,
                 tokenize=True,
                 add_generation_prompt=True,
                 return_tensors="pt",
-            ).to(model.device)
-
+                return_dict=True,
+            )
+            input_ids = tokenized["input_ids"].to(model.device)
             prompt_len = input_ids.shape[-1]
 
             with torch.no_grad():
