@@ -117,7 +117,7 @@ Set `RUNPOD_API_KEY` and `RUNPOD_ENDPOINT_ID` in the buzz-bot k8s secret.
 | `R2_PUBLIC_URL` | yes | — | Public base URL for R2 objects |
 | `GEMINI_API_KEY` | yes | — | Google Gemini API key (Tier 2 translation) |
 | `GEMINI_MODEL` | no | `gemini-2.5-flash` | Gemini model for Tier 2 translation |
-| `HYMT_MODEL` | no | `Tencent-Hunyuan/HunyuanTranslate-1.8B` | HY-MT model for Tier 1 translation |
+| `HYMT_MODEL` | no | `tencent/HY-MT1.5-1.8B` | HY-MT model for Tier 1 translation |
 | `HYMT_LANGUAGES` | no | `en,es,fr,de,it,pt,ru,zh,ja,ko,nl` | Comma-separated Tier 1 language codes |
 | `HF_TOKEN` | yes | — | HuggingFace token (pyannote diarization models) |
 | `DEMUCS_MODEL` | no | `htdemucs_ft` | Demucs model name |
