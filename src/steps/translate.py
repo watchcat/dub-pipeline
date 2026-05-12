@@ -447,9 +447,11 @@ def _translate_hymt_batch(
             input_ids = tokenizer.apply_chat_template(
                 messages,
                 tokenize=True,
-                add_generation_prompt=False,
+                add_generation_prompt=True,
                 return_tensors="pt",
             ).to(model.device)
+
+            prompt_len = input_ids.shape[-1]
 
             with torch.no_grad():
                 outputs = model.generate(
@@ -463,7 +465,7 @@ def _translate_hymt_batch(
                 )
 
             # Decode only the generated tokens (skip the prompt)
-            generated = outputs[0][input_ids.shape[1]:]
+            generated = outputs[0][prompt_len:]
             response = tokenizer.decode(generated, skip_special_tokens=True).strip()
 
             if response:
@@ -472,7 +474,7 @@ def _translate_hymt_batch(
             else:
                 log.warning(f"translate: HY-MT seg {seg['idx']} returned empty response")
         except Exception as exc:
-            log.error(f"translate: HY-MT seg {seg['idx']} failed: {exc}")
+            log.error(f"translate: HY-MT seg {seg['idx']} failed: {type(exc).__name__}: {exc}", exc_info=True)
         finally:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
