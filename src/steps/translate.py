@@ -411,56 +411,22 @@ def _translate_batch(
     raise last_exc
 
 
-_HYMT_PROMPT_TEMPLATE = """\
-Translate the following podcast transcript segments from {source_language} to {target_language}.
-Maintain the speaker's tone and style. Translate only the TRANSLATE segments.
-
-{context_block}TRANSLATE:
-{translate_block}
-Output format: one translation per line, prefixed with idx.
-{format_block}"""
-
-
-def _build_hymt_prompt(
-    batch: list[dict],
-    source_lang: str,
-    target_lang: str,
-    prev_ctx: list[dict],
-    next_seg: dict | None,
-) -> str:
-    src_name = _LANG_NAMES.get(source_lang.lower(), source_lang)
+def _build_hymt_message(text: str, target_lang: str, source_lang: str) -> list[dict]:
+    """Build a chat message for a single segment using the model's native format."""
     tgt_name = _LANG_NAMES.get(target_lang.lower(), target_lang)
 
-    context_lines = []
-    if prev_ctx:
-        context_lines.append("CONTEXT (already translated):")
-        for i, ctx in enumerate(prev_ctx, 1):
-            context_lines.append(f"[{i}] {ctx['translated_text']}")
-        context_lines.append("")
-    context_block = "\n".join(context_lines) + "\n" if context_lines else ""
+    # Model docs: use Chinese prompt for zh<=>xx, English prompt for xx<=>xx
+    if source_lang.lower() == "zh" or target_lang.lower() == "zh":
+        prompt = (
+            f"将以下文本翻译为{tgt_name}，注意只需要输出翻译后的结果，不要额外解释：\n\n{text}"
+        )
+    else:
+        prompt = (
+            f"Translate the following segment into {tgt_name}, "
+            f"without additional explanation.\n\n{text}"
+        )
 
-    translate_lines = []
-    for seg in batch:
-        speaker_tag = f" [{seg['speaker']}]" if seg.get("speaker") else ""
-        translate_lines.append(f"[idx={seg['idx']}]{speaker_tag}: {seg['text']}")
-
-    if next_seg:
-        translate_lines.append("")
-        translate_lines.append(f"NEXT (for context only):")
-        translate_lines.append(next_seg["text"])
-
-    format_lines = [f"[idx={seg['idx']}]: <target>translated text</target>" for seg in batch]
-
-    return _HYMT_PROMPT_TEMPLATE.format(
-        source_language=src_name,
-        target_language=tgt_name,
-        context_block=context_block,
-        translate_block="\n".join(translate_lines),
-        format_block="\n".join(format_lines),
-    )
-
-
-_HYMT_TARGET_RE = re.compile(r"\[idx=(\d+)\]:\s*<target>(.*?)</target>", re.DOTALL)
+    return [{"role": "user", "content": prompt}]
 
 
 def _translate_hymt_batch(
@@ -470,50 +436,45 @@ def _translate_hymt_batch(
     prev_ctx: list[dict],
     next_seg: dict | None,
 ) -> dict[int, str]:
-    """Translate one batch using the local HY-MT model. Returns {idx: translated_text}."""
+    """Translate segments one-at-a-time using the local HY-MT model via chat template.
+    Returns {idx: translated_text}."""
     model, tokenizer = _load_hymt()
-    prompt = _build_hymt_prompt(segments, source_lang, target_lang, prev_ctx, next_seg)
-
-    try:
-        inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-        with torch.no_grad():
-            outputs = model.generate(
-                **inputs,
-                max_new_tokens=2048,
-                temperature=0.2,
-                do_sample=True,
-                top_p=0.9,
-            )
-
-        # Decode only the generated tokens (skip the prompt)
-        generated = outputs[0][inputs["input_ids"].shape[1]:]
-        response = tokenizer.decode(generated, skip_special_tokens=True).strip()
-    except Exception as exc:
-        log.error(f"translate: HY-MT inference failed: {exc}")
-        return {}
-    finally:
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
     out: dict[int, str] = {}
-    for match in _HYMT_TARGET_RE.finditer(response):
-        idx = int(match.group(1))
-        text = match.group(2).strip()
-        if text:
-            out[idx] = text
 
-    if not out:
-        # Fallback: if no <target> tags found, try to parse as plain text lines
-        # This handles cases where the model doesn't follow the exact format
-        log.warning("translate: HY-MT response had no <target> tags, attempting line parse")
-        lines = response.strip().splitlines()
-        idx_re = re.compile(r"\[idx=(\d+)\]:\s*(.*)")
-        for line in lines:
-            m = idx_re.match(line.strip())
-            if m:
-                idx = int(m.group(1))
-                text = m.group(2).strip()
-                if text:
-                    out[idx] = text
+    for seg in segments:
+        messages = _build_hymt_message(seg["text"], target_lang, source_lang)
+        try:
+            input_ids = tokenizer.apply_chat_template(
+                messages,
+                tokenize=True,
+                add_generation_prompt=False,
+                return_tensors="pt",
+            ).to(model.device)
+
+            with torch.no_grad():
+                outputs = model.generate(
+                    input_ids,
+                    max_new_tokens=512,
+                    top_k=20,
+                    top_p=0.6,
+                    temperature=0.7,
+                    repetition_penalty=1.05,
+                    do_sample=True,
+                )
+
+            # Decode only the generated tokens (skip the prompt)
+            generated = outputs[0][input_ids.shape[1]:]
+            response = tokenizer.decode(generated, skip_special_tokens=True).strip()
+
+            if response:
+                out[seg["idx"]] = response
+                log.debug(f"translate: HY-MT seg {seg['idx']}: '{seg['text'][:40]}' → '{response[:40]}'")
+            else:
+                log.warning(f"translate: HY-MT seg {seg['idx']} returned empty response")
+        except Exception as exc:
+            log.error(f"translate: HY-MT seg {seg['idx']} failed: {exc}")
+        finally:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     return out

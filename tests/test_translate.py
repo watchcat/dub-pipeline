@@ -1,4 +1,4 @@
-"""Unit tests for HY-MT prompt building and response parsing."""
+"""Unit tests for HY-MT prompt building."""
 import re
 from unittest.mock import patch, MagicMock
 
@@ -14,73 +14,35 @@ os.environ.setdefault("R2_PUBLIC_URL", "http://test")
 os.environ.setdefault("GEMINI_API_KEY", "test")
 os.environ.setdefault("HF_TOKEN", "test")
 
-from src.steps.translate import (
-    _build_hymt_prompt,
-    _HYMT_TARGET_RE,
-)
+from src.steps.translate import _build_hymt_message
 
 
-class TestBuildHymtPrompt:
-    def test_basic_prompt_structure(self):
-        batch = [
-            {"idx": 0, "text": "Hello world", "speaker": "SPEAKER_00"},
-            {"idx": 1, "text": "How are you", "speaker": "SPEAKER_01"},
-        ]
-        prompt = _build_hymt_prompt(batch, "en", "ru", prev_ctx=[], next_seg=None)
+class TestBuildHymtMessage:
+    def test_english_prompt_for_non_chinese(self):
+        messages = _build_hymt_message("Hello world", "es", "en")
+        assert len(messages) == 1
+        assert messages[0]["role"] == "user"
+        assert "Translate the following segment into Spanish" in messages[0]["content"]
+        assert "without additional explanation" in messages[0]["content"]
+        assert "Hello world" in messages[0]["content"]
 
-        assert "English" in prompt
-        assert "Russian" in prompt
-        assert "[idx=0] [SPEAKER_00]: Hello world" in prompt
-        assert "[idx=1] [SPEAKER_01]: How are you" in prompt
-        assert "TRANSLATE:" in prompt
-        assert "<target>translated text</target>" in prompt
+    def test_chinese_prompt_when_target_is_zh(self):
+        messages = _build_hymt_message("Hello world", "zh", "en")
+        assert "翻译为" in messages[0]["content"]
+        assert "Hello world" in messages[0]["content"]
 
-    def test_with_context(self):
-        batch = [{"idx": 5, "text": "Third segment", "speaker": ""}]
-        prev_ctx = [
-            {"translated_text": "First translated"},
-            {"translated_text": "Second translated"},
-        ]
-        next_seg = {"idx": 6, "text": "Fourth segment", "speaker": ""}
+    def test_chinese_prompt_when_source_is_zh(self):
+        messages = _build_hymt_message("你好世界", "en", "zh")
+        assert "翻译为" in messages[0]["content"]
+        assert "English" in messages[0]["content"]
+        assert "你好世界" in messages[0]["content"]
 
-        prompt = _build_hymt_prompt(batch, "en", "es", prev_ctx, next_seg)
+    def test_non_chinese_pair(self):
+        messages = _build_hymt_message("Bonjour le monde", "de", "fr")
+        assert "Translate the following segment into German" in messages[0]["content"]
+        assert "Bonjour le monde" in messages[0]["content"]
 
-        assert "CONTEXT (already translated):" in prompt
-        assert "[1] First translated" in prompt
-        assert "[2] Second translated" in prompt
-        assert "NEXT (for context only):" in prompt
-        assert "Fourth segment" in prompt
-
-    def test_no_context(self):
-        batch = [{"idx": 0, "text": "First segment", "speaker": ""}]
-        prompt = _build_hymt_prompt(batch, "en", "fr", prev_ctx=[], next_seg=None)
-
-        assert "CONTEXT" not in prompt
-        assert "NEXT" not in prompt
-
-    def test_no_speaker(self):
-        batch = [{"idx": 0, "text": "No speaker here", "speaker": ""}]
-        prompt = _build_hymt_prompt(batch, "en", "de", prev_ctx=[], next_seg=None)
-
-        assert "[idx=0]: No speaker here" in prompt
-        assert "SPEAKER" not in prompt
-
-
-class TestTargetRegex:
-    def test_parses_target_tags(self):
-        response = (
-            "[idx=0]: <target>Привет мир</target>\n"
-            "[idx=1]: <target>Как дела</target>\n"
-        )
-        matches = {int(m.group(1)): m.group(2).strip() for m in _HYMT_TARGET_RE.finditer(response)}
-        assert matches == {0: "Привет мир", 1: "Как дела"}
-
-    def test_handles_extra_whitespace(self):
-        response = "[idx=42]:  <target>  Hola mundo  </target>\n"
-        matches = {int(m.group(1)): m.group(2).strip() for m in _HYMT_TARGET_RE.finditer(response)}
-        assert matches == {42: "Hola mundo"}
-
-    def test_no_match_returns_empty(self):
-        response = "Some random text without target tags"
-        matches = {int(m.group(1)): m.group(2).strip() for m in _HYMT_TARGET_RE.finditer(response)}
-        assert matches == {}
+    def test_preserves_source_text(self):
+        text = "This is a test with special chars: <>&"
+        messages = _build_hymt_message(text, "ru", "en")
+        assert text in messages[0]["content"]
