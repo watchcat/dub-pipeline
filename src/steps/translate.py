@@ -40,7 +40,7 @@ def _load_hymt():
     )
     _hymt_model = AutoModelForCausalLM.from_pretrained(
         config.HYMT_MODEL,
-        torch_dtype=torch.float16,
+        dtype=torch.float16,
         device_map="auto",
         trust_remote_code=True,
     )
