@@ -12,42 +12,11 @@ import time
 from google import genai
 from google.genai import types
 
-import re
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
 from src import config
 
 log = logging.getLogger(__name__)
 
 _client = genai.Client(api_key=config.GEMINI_API_KEY)
-
-# ── HY-MT model (lazy-loaded on first use) ───────────────────────────────────
-
-_hymt_model = None
-_hymt_tokenizer = None
-
-
-def _load_hymt():
-    """Load HY-MT model and tokenizer once, keep in GPU memory."""
-    global _hymt_model, _hymt_tokenizer
-    if _hymt_model is not None:
-        return _hymt_model, _hymt_tokenizer
-
-    log.info(f"translate: loading HY-MT model {config.HYMT_MODEL}")
-    _hymt_tokenizer = AutoTokenizer.from_pretrained(
-        config.HYMT_MODEL, trust_remote_code=True,
-    )
-    _hymt_model = AutoModelForCausalLM.from_pretrained(
-        config.HYMT_MODEL,
-        dtype=torch.float16,
-        device_map="auto",
-        trust_remote_code=True,
-    )
-    _hymt_model.eval()
-    log.info("translate: HY-MT model loaded")
-    return _hymt_model, _hymt_tokenizer
-
 
 _LANG_NAMES = {
     "en": "English",  "es": "Spanish",  "fr": "French",   "de": "German",
@@ -166,104 +135,23 @@ _RESPONSE_SCHEMA = types.Schema(
 _MAX_RETRIES = 3
 _RETRY_DELAY = 10    # seconds, doubled on each retry
 _FALLBACK_MODEL = "gemini-2.0-flash"
-_BATCH_SIZE = 20        # segments per Gemini call (smaller = less output token pressure)
-_HYMT_BATCH_SIZE = 5    # segments per HY-MT call (1.8B model has limited context)
+_BATCH_SIZE = 20     # segments per Gemini call (smaller = less output token pressure)
 _MIN_COVERAGE = 1.0  # require 100% of segments translated; retry missing ones
 
 
 def translate(segments: list[dict], source_lang: str, target_lang: str) -> list[dict]:
     """
-    Translate all segments from source_lang to target_lang.
-    Tier 1 languages use local HY-MT model; Tier 2 uses Gemini Flash.
+    Translate all segments from source_lang to target_lang using Gemini Flash.
+    Returns segments with "translated_text" added.
     Same-language jobs copy text verbatim.
     """
     if source_lang.lower() == target_lang.lower():
         log.info(f"translate: source == target ({source_lang}), copying text verbatim")
         return [{**seg, "translated_text": seg["text"]} for seg in segments]
 
-    use_hymt = target_lang.lower() in config.HYMT_LANGUAGES
     src_name = _LANG_NAMES.get(source_lang.lower(), source_lang)
     tgt_name = _LANG_NAMES.get(target_lang.lower(), target_lang)
-    backend = "HY-MT" if use_hymt else "Gemini"
-    log.info(f"translate: {len(segments)} segments, {src_name} → {tgt_name} via {backend}")
-
-    if not use_hymt:
-        return _translate_gemini(segments, source_lang, target_lang)
-
-    # HY-MT path
-    input_segs = [
-        {
-            "idx":     seg.get("idx", i),
-            "text":    seg.get("text", "").strip(),
-            "speaker": seg.get("speaker", ""),
-        }
-        for i, seg in enumerate(segments)
-    ]
-
-    translations: dict[int, str] = {}
-    recent_translated: list[dict] = []
-
-    for batch_start in range(0, len(input_segs), _HYMT_BATCH_SIZE):
-        batch = input_segs[batch_start : batch_start + _HYMT_BATCH_SIZE]
-        prev_ctx = recent_translated[-2:]
-        next_idx = batch_start + len(batch)
-        next_seg = input_segs[next_idx] if next_idx < len(input_segs) else None
-
-        log.info(
-            f"translate: HY-MT batch {batch_start // _HYMT_BATCH_SIZE + 1}, "
-            f"segs {batch_start}–{batch_start + len(batch) - 1}"
-        )
-        batch_result = _translate_hymt_batch(batch, source_lang, target_lang, prev_ctx, next_seg)
-
-        # Drop spurious idx values outside this batch
-        batch_idx_set = {s["idx"] for s in batch}
-        spurious = [idx for idx in batch_result if idx not in batch_idx_set]
-        if spurious:
-            log.warning(f"translate: dropping spurious idx values: {spurious}")
-            for idx in spurious:
-                del batch_result[idx]
-
-        # Retry missing segments individually
-        incomplete = [s for s in batch if not batch_result.get(s["idx"])]
-        if incomplete:
-            log.warning(
-                f"translate: {len(incomplete)}/{len(batch)} segments missing "
-                f"— retrying individually"
-            )
-            for seg in incomplete:
-                retry_result = _translate_hymt_batch([seg], source_lang, target_lang, prev_ctx, next_seg=None)
-                if retry_result.get(seg["idx"]):
-                    batch_result[seg["idx"]] = retry_result[seg["idx"]]
-                else:
-                    log.error(f"translate: seg {seg['idx']} still empty after retry — using source text")
-                    batch_result[seg["idx"]] = seg["text"]
-
-        translations.update(batch_result)
-        for seg in batch:
-            recent_translated.append({
-                "text":            seg["text"],
-                "translated_text": batch_result.get(seg["idx"], ""),
-            })
-
-    out = []
-    for i, seg in enumerate(segments):
-        idx = seg.get("idx", i)
-        translated = translations.get(idx) or ""
-        out.append({**seg, "translated_text": translated})
-
-    log.info("translate: done")
-    if out:
-        log.info(
-            f"translate: sample — '{out[0].get('text','')[:60]}' "
-            f"→ '{out[0].get('translated_text','')[:60]}'"
-        )
-    return out
-
-
-def _translate_gemini(segments: list[dict], source_lang: str, target_lang: str) -> list[dict]:
-    """Gemini Flash translation path — used for Tier 2 languages."""
-    src_name = _LANG_NAMES.get(source_lang.lower(), source_lang)
-    tgt_name = _LANG_NAMES.get(target_lang.lower(), target_lang)
+    log.info(f"translate: {len(segments)} segments, {src_name} → {tgt_name} via Gemini")
 
     system_prompt = (
         _SYSTEM_PROMPT_TEMPLATE
@@ -409,75 +297,3 @@ def _translate_batch(
                     log.error(f"translate: {model} failed all retries: {exc} — trying fallback")
 
     raise last_exc
-
-
-def _build_hymt_message(text: str, target_lang: str, source_lang: str) -> list[dict]:
-    """Build a chat message for a single segment using the model's native format."""
-    tgt_name = _LANG_NAMES.get(target_lang.lower(), target_lang)
-
-    # Model docs: use Chinese prompt for zh<=>xx, English prompt for xx<=>xx
-    if source_lang.lower() == "zh" or target_lang.lower() == "zh":
-        prompt = (
-            f"将以下文本翻译为{tgt_name}，注意只需要输出翻译后的结果，不要额外解释：\n\n{text}"
-        )
-    else:
-        prompt = (
-            f"Translate the following segment into {tgt_name}, "
-            f"without additional explanation.\n\n{text}"
-        )
-
-    return [{"role": "user", "content": prompt}]
-
-
-def _translate_hymt_batch(
-    segments: list[dict],
-    source_lang: str,
-    target_lang: str,
-    prev_ctx: list[dict],
-    next_seg: dict | None,
-) -> dict[int, str]:
-    """Translate segments one-at-a-time using the local HY-MT model via chat template.
-    Returns {idx: translated_text}."""
-    model, tokenizer = _load_hymt()
-    out: dict[int, str] = {}
-
-    for seg in segments:
-        messages = _build_hymt_message(seg["text"], target_lang, source_lang)
-        try:
-            tokenized = tokenizer.apply_chat_template(
-                messages,
-                tokenize=True,
-                add_generation_prompt=True,
-                return_tensors="pt",
-                return_dict=True,
-            )
-            input_ids = tokenized["input_ids"].to(model.device)
-            prompt_len = input_ids.shape[-1]
-
-            with torch.no_grad():
-                outputs = model.generate(
-                    input_ids,
-                    max_new_tokens=512,
-                    top_k=20,
-                    top_p=0.6,
-                    temperature=0.7,
-                    repetition_penalty=1.05,
-                    do_sample=True,
-                )
-
-            # Decode only the generated tokens (skip the prompt)
-            generated = outputs[0][prompt_len:]
-            response = tokenizer.decode(generated, skip_special_tokens=True).strip()
-
-            if response:
-                out[seg["idx"]] = response
-                log.debug(f"translate: HY-MT seg {seg['idx']}: '{seg['text'][:40]}' → '{response[:40]}'")
-            else:
-                log.warning(f"translate: HY-MT seg {seg['idx']} returned empty response")
-        except Exception as exc:
-            log.error(f"translate: HY-MT seg {seg['idx']} failed: {type(exc).__name__}: {exc}", exc_info=True)
-        finally:
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-
-    return out

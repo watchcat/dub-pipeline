@@ -15,10 +15,6 @@ R2_PUBLIC_URL    = os.environ["R2_PUBLIC_URL"]  # https://pub-xxx.r2.dev
 GEMINI_API_KEY   = os.environ["GEMINI_API_KEY"]
 GEMINI_MODEL     = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
-# HY-MT local translation model (Tier 1 languages)
-HYMT_MODEL       = os.environ.get("HYMT_MODEL", "tencent/HY-MT1.5-1.8B")
-HYMT_LANGUAGES   = set(os.environ.get("HYMT_LANGUAGES", "en,es,fr,de,it,pt,ru,zh,ja,ko,nl").split(","))
-
 # HuggingFace token (required for pyannote speaker diarization models)
 HF_TOKEN         = os.environ["HF_TOKEN"]
 
