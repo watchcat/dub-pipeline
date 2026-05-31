@@ -1,5 +1,7 @@
 """Run record + storage abstraction."""
-from dataclasses import dataclass, replace
+import json
+import os
+from dataclasses import asdict, dataclass, fields as dataclass_fields, replace
 from typing import Optional, Protocol
 
 
@@ -43,3 +45,48 @@ class InMemoryRunStore:
     def update(self, run_id: str, **fields) -> Run:
         self._runs[run_id] = replace(self._runs[run_id], **fields)
         return self._runs[run_id]
+
+
+import psycopg  # noqa: E402  (stdlib imports above, third-party below)
+
+_PERSISTED = [f.name for f in dataclass_fields(Run)]  # all Run columns
+
+
+class PgRunStore:
+    def __init__(self, dsn: str):
+        self.dsn = dsn
+
+    def _conn(self):
+        return psycopg.connect(self.dsn, autocommit=True)
+
+    def init_schema(self) -> None:
+        ddl = open(os.path.join(os.path.dirname(__file__), "schema.sql")).read()
+        with self._conn() as c:
+            c.execute(ddl)
+
+    def create(self, run: Run) -> None:
+        d = asdict(run)
+        d["speaker_keys"] = json.dumps(d["speaker_keys"]) if d["speaker_keys"] is not None else None
+        cols = ", ".join(_PERSISTED)
+        ph = ", ".join(f"%({k})s" for k in _PERSISTED)
+        with self._conn() as c:
+            c.execute(f"INSERT INTO orch_run ({cols}) VALUES ({ph})", d)
+
+    def get(self, run_id: str) -> Run:
+        with self._conn() as c:
+            row = c.execute(
+                f"SELECT {', '.join(_PERSISTED)} FROM orch_run WHERE id = %s",
+                (run_id,)).fetchone()
+        if row is None:
+            raise KeyError(run_id)
+        data = dict(zip(_PERSISTED, row))
+        return Run(**data)
+
+    def update(self, run_id: str, **fields) -> Run:
+        if "speaker_keys" in fields and fields["speaker_keys"] is not None:
+            fields = {**fields, "speaker_keys": json.dumps(fields["speaker_keys"])}
+        sets = ", ".join(f"{k} = %({k})s" for k in fields)
+        params = {**fields, "rid": run_id}
+        with self._conn() as c:
+            c.execute(f"UPDATE orch_run SET {sets}, updated_at = now() WHERE id = %(rid)s", params)
+        return self.get(run_id)
