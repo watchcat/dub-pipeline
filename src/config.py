@@ -35,3 +35,13 @@ BG_VOLUME_DEFAULT  = float(os.environ.get("BG_VOLUME_DEFAULT", "0.15"))
 # Segment duration constraints
 MAX_SEGMENT_SEC  = 30.0   # split longer segments before synthesis
 MIN_SEGMENT_SEC  = 0.5    # skip synthesis below this, insert silence
+
+# ── Orchestrator ────────────────────────────────────────────────────────────
+DATABASE_URL          = os.environ.get("DATABASE_URL", "")
+ORCH_CALLBACK_SECRET  = os.environ.get("ORCH_CALLBACK_SECRET", "dev-secret")
+ORCH_BASE_URL         = os.environ.get("ORCH_BASE_URL", "http://localhost:8080")
+BUZZBOT_RESULT_URL     = os.environ.get("BUZZBOT_RESULT_URL", "")
+BUZZBOT_TRANSCRIPT_URL = os.environ.get("BUZZBOT_TRANSCRIPT_URL", "")
+CPU_TEXT_URL          = os.environ.get("CPU_TEXT_URL", "")
+CPU_MUX_URL           = os.environ.get("CPU_MUX_URL", "")
+MAX_STEP_ATTEMPTS     = int(os.environ.get("MAX_STEP_ATTEMPTS", "3"))
