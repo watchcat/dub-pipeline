@@ -67,6 +67,27 @@ Stems (vocals, background, speaker samples) are **episode-scoped** — reused ac
 
 The worker saves pipeline state to the RunPod Network Volume after each step. If a worker is interrupted (spot instance preempted, OOM), the next worker picks up from the last completed step rather than starting over.
 
+## Architecture (decomposed)
+
+The pipeline runs as a central **orchestrator** (k3s) driving four task-runners:
+
+| Runner    | Tier | Steps                         | Host           |
+|-----------|------|-------------------------------|----------------|
+| gpu-prep  | GPU  | separate, transcribe, extract | Nebius job     |
+| cpu-text  | CPU  | split, translate              | k3s worker     |
+| gpu-synth | GPU  | synthesize                    | Nebius job     |
+| cpu-mux   | CPU  | assemble, mix                 | k3s worker     |
+
+The orchestrator advances a `Run` (Postgres `orch_run`) through a declarative
+workflow (`dub` = all four; `transcribe` = gpu-prep only). Large artifacts pass
+through R2 by key (`dub-runs/{run_id}/segments.json`); small scalars via signed
+`/callback` posts. buzz-bot's `/internal/dub_progress` + `/internal/dub_result`
+contract is unchanged.
+
+`src/worker.py` (the original RunPod monolith) remains for coexistence until
+cutover. Nebius dispatch + k8s deploy + buzz-bot routing are tracked in
+`docs/superpowers/plans/2026-05-31-pipeline-decomposition-cloud.md` (Plan 2).
+
 ## Requirements
 
 - Python 3.11+
