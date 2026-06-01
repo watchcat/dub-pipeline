@@ -5,7 +5,6 @@
 - NebiusDispatcher: launches a Nebius GPU job — added in Plan 2.
 """
 import logging
-import threading
 from typing import Callable, Protocol
 
 import requests

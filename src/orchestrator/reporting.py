@@ -47,6 +47,8 @@ class Reporter:
 
     def transcript_result(self, run: Run) -> None:
         segments = artifacts.read_segments(run.segments_key)
+        # Transcripts post to a dedicated config endpoint (per spec); the buzz-bot
+        # transcribe consumer + its per-run callback wiring is Plan 2.
         _post(config.BUZZBOT_TRANSCRIPT_URL, {
             "episode_id": run.episode_id,
             "source_lang": run.source_lang,

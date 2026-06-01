@@ -60,7 +60,8 @@ class PgRunStore:
         return psycopg.connect(self.dsn, autocommit=True)
 
     def init_schema(self) -> None:
-        ddl = open(os.path.join(os.path.dirname(__file__), "schema.sql")).read()
+        with open(os.path.join(os.path.dirname(__file__), "schema.sql")) as f:
+            ddl = f.read()
         with self._conn() as c:
             c.execute(ddl)
 
@@ -83,6 +84,11 @@ class PgRunStore:
         return Run(**data)
 
     def update(self, run_id: str, **fields) -> Run:
+        if not fields:
+            return self.get(run_id)
+        unknown = set(fields) - set(_PERSISTED)
+        if unknown:
+            raise ValueError(f"unknown run fields: {unknown}")
         if "speaker_keys" in fields and fields["speaker_keys"] is not None:
             fields = {**fields, "speaker_keys": json.dumps(fields["speaker_keys"])}
         sets = ", ".join(f"{k} = %({k})s" for k in fields)

@@ -32,12 +32,12 @@ def run(inp: dict) -> dict:
 
         out_segments = []
         for seg in synthed:
-            wav = seg.get("synth_wav")
+            seg = {**seg}  # copy so we never mutate the input segments
+            wav = seg.pop("synth_wav", None)  # local path not useful downstream
             if wav:
                 key = artifacts.stem_key(episode_id, f"synth_{language}_{seg['idx']:04d}.wav")
                 storage.upload(wav, key, "audio/wav")
-                seg = {**seg, "synth_r2_key": key}
-            seg.pop("synth_wav", None)  # local path not useful downstream
+                seg["synth_r2_key"] = key
             out_segments.append(seg)
 
         segments_key_out = artifacts.write_segments(run_id, out_segments)
