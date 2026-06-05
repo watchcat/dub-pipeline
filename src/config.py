@@ -45,3 +45,18 @@ BUZZBOT_TRANSCRIPT_URL = os.environ.get("BUZZBOT_TRANSCRIPT_URL", "")
 CPU_TEXT_URL          = os.environ.get("CPU_TEXT_URL", "")
 CPU_MUX_URL           = os.environ.get("CPU_MUX_URL", "")
 MAX_STEP_ATTEMPTS     = int(os.environ.get("MAX_STEP_ATTEMPTS", "3"))
+
+# ── Nebius GPU jobs + reconciler ─────────────────────────────────────────────
+NEBIUS_API_KEY    = os.environ.get("NEBIUS_API_KEY", "")
+NEBIUS_PROJECT_ID = os.environ.get("NEBIUS_PROJECT_ID", "")
+NEBIUS_API_BASE   = os.environ.get("NEBIUS_API_BASE", "https://api.nebius.cloud")
+GPU_IMAGE         = os.environ.get("GPU_IMAGE", "")
+NEBIUS_PRESET = {
+    "prep":  os.environ.get("NEBIUS_PREP_PRESET", ""),
+    "synth": os.environ.get("NEBIUS_SYNTH_PRESET", ""),
+}
+STEP_TIMEOUT = {
+    "prep":  int(os.environ.get("STEP_TIMEOUT_PREP", "1800")),
+    "synth": int(os.environ.get("STEP_TIMEOUT_SYNTH", "1200")),
+}
+RECONCILER_INTERVAL_SEC = int(os.environ.get("RECONCILER_INTERVAL_SEC", "60"))
