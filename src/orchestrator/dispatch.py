@@ -4,10 +4,14 @@
 - LocalDispatcher : run the worker function in-process (dev / local e2e).
 - NebiusDispatcher: launches a Nebius GPU job — added in Plan 2.
 """
+import json as _json
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Protocol
 
 import requests
+from src import config
+from src.orchestrator import nebius
 from src.orchestrator.runs import Run
 from src.orchestrator.workflows import Step
 
@@ -45,3 +49,23 @@ class LocalDispatcher:
                 requests.post(callback_url, json={"ok": False, "error": str(e)}, timeout=30)
 
         _go()  # synchronous in tests; see note for local e2e
+
+
+class NebiusDispatcher:
+    """Dispatch a GPU step by launching a Nebius job; record its id + deadline."""
+    def __init__(self, store, nebius_client=nebius,
+                 now=lambda: datetime.now(timezone.utc)):
+        self.store = store
+        self.nebius = nebius_client
+        self.now = now
+
+    def dispatch(self, step: Step, run: Run, payload: dict, callback_url: str) -> None:
+        timeout = config.STEP_TIMEOUT[step.name]
+        job_id = self.nebius.create_job(
+            image=config.GPU_IMAGE,
+            preset=config.NEBIUS_PRESET[step.name],
+            env={"INPUT_JSON": _json.dumps(payload), "CALLBACK_URL": callback_url,
+                 "STEP": step.name},
+            timeout_sec=timeout)
+        self.store.update(run.id, nebius_job_id=job_id,
+                          step_deadline=self.now() + timedelta(seconds=timeout))
