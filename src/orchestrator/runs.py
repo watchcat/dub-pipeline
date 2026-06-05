@@ -2,6 +2,7 @@
 import json
 import os
 from dataclasses import asdict, dataclass, fields as dataclass_fields, replace
+from datetime import datetime
 from typing import Optional, Protocol
 
 
@@ -24,12 +25,15 @@ class Run:
     r2_url: Optional[str] = None
     duration_sec: Optional[float] = None
     segment_count: Optional[int] = None
+    nebius_job_id: Optional[str] = None
+    step_deadline: Optional["datetime"] = None
 
 
 class RunStore(Protocol):
     def create(self, run: Run) -> None: ...
     def get(self, run_id: str) -> Run: ...
     def update(self, run_id: str, **fields) -> Run: ...
+    def due_for_reconcile(self, now: "datetime") -> list[Run]: ...
 
 
 class InMemoryRunStore:
@@ -45,6 +49,11 @@ class InMemoryRunStore:
     def update(self, run_id: str, **fields) -> Run:
         self._runs[run_id] = replace(self._runs[run_id], **fields)
         return self._runs[run_id]
+
+    def due_for_reconcile(self, now):
+        return [r for r in self._runs.values()
+                if r.status == "running" and r.nebius_job_id is not None
+                and r.step_deadline is not None and r.step_deadline < now]
 
 
 import psycopg  # noqa: E402  (stdlib imports above, third-party below)
@@ -96,3 +105,12 @@ class PgRunStore:
         with self._conn() as c:
             c.execute(f"UPDATE orch_run SET {sets}, updated_at = now() WHERE id = %(rid)s", params)
         return self.get(run_id)
+
+    def due_for_reconcile(self, now):
+        with self._conn() as c:
+            rows = c.execute(
+                f"SELECT {', '.join(_PERSISTED)} FROM orch_run "
+                "WHERE status = 'running' AND nebius_job_id IS NOT NULL "
+                "AND step_deadline IS NOT NULL AND step_deadline < %s",
+                (now,)).fetchall()
+        return [Run(**dict(zip(_PERSISTED, row))) for row in rows]

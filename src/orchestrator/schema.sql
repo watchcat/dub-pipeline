@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS orch_run (
     r2_url        TEXT,
     duration_sec  DOUBLE PRECISION,
     segment_count INTEGER,
+    nebius_job_id TEXT,
+    step_deadline TIMESTAMPTZ,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
