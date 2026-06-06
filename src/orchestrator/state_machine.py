@@ -51,6 +51,11 @@ class StateMachine:
             run = self.store.update(run.id, status="failed")
             self.reporter.failed(run, step_name, error)
 
+    def relay_progress(self, run_id: str, step_name: str, pct) -> None:
+        run = self.store.get(run_id)
+        label = workflows.step_by_name(run.workflow_type, step_name).progress
+        self.reporter.progress(run, label, pct)
+
     def _finalize(self, run: Run) -> None:
         run = self.store.update(run.id, status="done")
         if run.workflow_type == "transcribe":

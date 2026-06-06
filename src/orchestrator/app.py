@@ -49,6 +49,15 @@ async def callback(run_id: str, step: str, token: str, request: Request):
     return {"ok": True}
 
 
+@app.post("/progress")
+async def progress(run_id: str, step: str, token: str, request: Request):
+    if not auth.verify_token(run_id, step, token):
+        return Response(status_code=401)
+    body = await request.json()
+    _sm.relay_progress(run_id, step, body.get("pct"))
+    return {"ok": True}
+
+
 @app.get("/healthz")
 async def healthz():
     return {"ok": True}
