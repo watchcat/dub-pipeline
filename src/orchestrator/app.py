@@ -14,10 +14,11 @@ app = FastAPI()
 _sm: StateMachine | None = None
 
 
-def configure(store, dispatchers, reporter) -> None:
+def configure(store, dispatchers, reporter) -> "StateMachine":
     """Wire the app to its collaborators (called at startup and from tests)."""
     global _sm
     _sm = StateMachine(store, dispatchers, reporter)
+    return _sm
 
 
 @app.post("/dispatch", status_code=202)
