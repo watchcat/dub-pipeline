@@ -1,0 +1,38 @@
+# k8s/cpu-mux.yaml — assemble+mix HTTP worker (in-cluster only).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cpu-mux
+  namespace: buzz-bot
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: cpu-mux}
+  template:
+    metadata:
+      labels: {app: cpu-mux}
+    spec:
+      containers:
+        - name: cpu-mux
+          image: dub-orch-cpu:latest
+          imagePullPolicy: IfNotPresent
+          command: ["uvicorn", "src.workers.cpu_mux:app", "--host", "0.0.0.0", "--port", "8000"]
+          ports: [{containerPort: 8000}]
+          envFrom:
+            - secretRef: {name: orch-secret}
+          readinessProbe:
+            httpGet: {path: /healthz, port: 8000}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 1000m, memory: 1Gi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cpu-mux
+  namespace: buzz-bot
+spec:
+  selector: {app: cpu-mux}
+  ports: [{port: 80, targetPort: 8000}]
