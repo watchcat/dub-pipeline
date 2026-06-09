@@ -1,0 +1,20 @@
+# Dockerfile.gpu — one GPU image, prep + synth entrypoints (Nebius Jobs)
+# Models live on a mounted volume (HF_HOME); not baked in.
+FROM runpod/pytorch:1.0.3-cu1281-torch271-ubuntu2204
+
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg libsndfile1 && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY src/ src/
+
+ENV TORCHDYNAMO_DISABLE=1
+ENV TEMP_DIR=/tmp/dub-pipeline
+ENV WHISPER_DEVICE=cuda
+ENV WHISPER_COMPUTE=float16
+
+# STEP (prep|synth), INPUT_JSON, CALLBACK_URL are supplied by the orchestrator's
+# NebiusDispatcher at job-create time.
+CMD ["python", "-m", "src.workers.gpu_entry"]

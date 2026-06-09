@@ -42,3 +42,9 @@ def upload_bytes(data: bytes, r2_key: str, content_type: str = "audio/wav") -> s
 
 def download(r2_key: str, local_path: str):
     _s3().download_file(config.R2_BUCKET, r2_key, local_path)
+
+
+def download_bytes(r2_key: str) -> bytes:
+    """Read an R2 object fully into memory."""
+    obj = _s3().get_object(Bucket=config.R2_BUCKET, Key=r2_key)
+    return obj["Body"].read()

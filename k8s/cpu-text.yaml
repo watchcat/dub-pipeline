@@ -1,0 +1,38 @@
+# k8s/cpu-text.yaml — split+translate HTTP worker (in-cluster only).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cpu-text
+  namespace: buzz-bot
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: cpu-text}
+  template:
+    metadata:
+      labels: {app: cpu-text}
+    spec:
+      containers:
+        - name: cpu-text
+          image: dub-orch-cpu:latest
+          imagePullPolicy: IfNotPresent
+          command: ["uvicorn", "src.workers.cpu_text:app", "--host", "0.0.0.0", "--port", "8000"]
+          ports: [{containerPort: 8000}]
+          envFrom:
+            - secretRef: {name: orch-secret}
+          readinessProbe:
+            httpGet: {path: /healthz, port: 8000}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cpu-text
+  namespace: buzz-bot
+spec:
+  selector: {app: cpu-text}
+  ports: [{port: 80, targetPort: 8000}]

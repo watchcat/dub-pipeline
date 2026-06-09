@@ -1,0 +1,65 @@
+# k8s/orchestrator.yaml — orchestrator brain (CPU image), public for Nebius callbacks.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dub-orchestrator
+  namespace: buzz-bot
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: dub-orchestrator}
+  template:
+    metadata:
+      labels: {app: dub-orchestrator}
+    spec:
+      containers:
+        - name: orchestrator
+          image: dub-orch-cpu:latest
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "src.orchestrator.main"]
+          ports: [{containerPort: 8080}]
+          envFrom:
+            - secretRef: {name: orch-secret}
+          readinessProbe:
+            httpGet: {path: /healthz, port: 8080}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /healthz, port: 8080}
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dub-orchestrator
+  namespace: buzz-bot
+spec:
+  selector: {app: dub-orchestrator}
+  ports: [{port: 80, targetPort: 8080}]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: dub-orchestrator
+  namespace: buzz-bot
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: orch.buzz-bot.top
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: dub-orchestrator
+                port: {number: 80}
+  tls:
+    - hosts: [orch.buzz-bot.top]
+      secretName: dub-orchestrator-tls

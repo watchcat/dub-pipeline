@@ -1,0 +1,14 @@
+# Dockerfile.cpu — orchestrator + cpu-text + cpu-mux (k3s). Slim, no GPU deps.
+FROM python:3.11-slim
+
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg libsndfile1 && rm -rf /var/lib/apt/lists/*
+
+COPY requirements-cpu.txt .
+RUN pip install --no-cache-dir -r requirements-cpu.txt
+COPY src/ src/
+
+ENV TEMP_DIR=/tmp/dub-pipeline
+# Default command = orchestrator; cpu-text/cpu-mux Deployments override it.
+CMD ["python", "-m", "src.orchestrator.main"]

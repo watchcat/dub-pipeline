@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import unicodedata
+from typing import Callable, Optional
 import soundfile
 
 log = logging.getLogger(__name__)
@@ -34,6 +35,7 @@ def synthesize(
     speaker_samples: dict[str, str],
     target_lang: str,
     out_dir: str,
+    on_progress: Optional[Callable[[int, int], None]] = None,
 ) -> list[dict]:
     """
     For each segment, synthesize translated_text using the speaker's voice sample.
@@ -47,7 +49,10 @@ def synthesize(
     sr = model.tts_model.sample_rate
 
     out = []
-    for seg in segments:
+    total = len(segments)
+    for i, seg in enumerate(segments):
+        if on_progress:
+            on_progress(i, total)
         speaker = seg.get("speaker", "SPEAKER_00")
         speaker_wav_path = speaker_samples.get(speaker)
         translated = _clean_for_tts(seg.get("translated_text", ""))
@@ -73,6 +78,8 @@ def synthesize(
             log.error(f"synthesize: seg {seg['idx']} failed: {e}")
             out.append({**seg, "synth_wav": None, "synth_duration": None})
 
+    if on_progress:
+        on_progress(total, total)
     return out
 
 
