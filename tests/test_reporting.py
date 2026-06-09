@@ -23,6 +23,13 @@ def test_progress_posts_to_progress_url():
     assert args[0] == "https://app/internal/dub_progress"
     assert kwargs["json"] == {"dub_id": 123, "step": "synthesizing", "pct": 40}
 
+def test_progress_skipped_for_transcribe_run_without_dub_id():
+    # A transcribe run has no dub_id; buzz-bot's dub_progress is dub-keyed and
+    # rejects a null dub_id, so the reporter must not post at all.
+    with patch("src.orchestrator.reporting.requests.post") as post:
+        Reporter().progress(make_run(workflow_type="transcribe", dub_id=None), "separating")
+    post.assert_not_called()
+
 def test_dub_result_builds_buzzbot_payload():
     with patch("src.orchestrator.reporting.artifacts.read_segments", return_value=SEGS), \
          patch("src.orchestrator.reporting.requests.post") as post:

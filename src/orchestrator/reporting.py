@@ -17,6 +17,11 @@ def _post(url: str, body: dict) -> None:
 
 class Reporter:
     def progress(self, run: Run, label: str, pct: int | None = None) -> None:
+        # buzz-bot's /internal/dub_progress is keyed by dub_id; a transcribe run
+        # has none, so there is no progress channel to post to (the front-end
+        # polls subtitles instead). Skip rather than post a null dub_id (rejected).
+        if run.dub_id is None:
+            return
         body = {"dub_id": run.dub_id, "step": label}
         if pct is not None:
             body["pct"] = pct
